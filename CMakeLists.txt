@@ -544,6 +544,9 @@ endif()
 set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} ${ARCH_C_FLAGS}")
 set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} ${ARCH_CXX_FLAGS}")
 
+set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -Wno-narrowing -Wno-unqualified-std-cast-call")
+message(STATUS "CMAKE_CXX_FLAGS: ${CMAKE_CXX_FLAGS}")
+
 add_subdirectory(util)
 add_subdirectory(doc/dev-reference)
 
@@ -562,7 +565,11 @@ if (CORRECT_PCRE_VERSION AND PCRE_BUILD_SOURCE AND BUILD_STATIC_LIBS)
     set(BUILD_CHIMERA TRUE)
 endif()
 
-add_subdirectory(unit)
+option(BUILD_UNIT_TESTS "Build unit tests (default TRUE)" TRUE)
+if(BUILD_UNIT_TESTS)
+    add_subdirectory(unit)
+endif()
+
 if (EXISTS ${CMAKE_SOURCE_DIR}/tools/CMakeLists.txt)
     add_subdirectory(tools)
 endif()
