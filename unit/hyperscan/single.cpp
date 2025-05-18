@@ -34,7 +34,7 @@
 
 #include <string>
 #include <tuple>
-
+#include <sys/mman.h>
 using namespace std;
 using namespace testing;
 
@@ -630,6 +630,30 @@ const TerminateMatchData terminateCases[] = {
 };
 
 INSTANTIATE_TEST_CASE_P(Single, HyperscanTestMatchTerminate, ValuesIn(terminateCases));
+
+TEST(OutOfBoundRead, mmap) {
+    const char* pattern = "bat|cat|mat|rat|fat|sat|pat|hat|vat";
+    const char* corpus = "VAt hat pat sat fat rat mat ca";
+
+    // Use mmap to reliably get corpus at the and of mapped memory region
+    size_t buffer_len = (128<<20);
+    char* buffer = (char*) mmap(NULL, buffer_len * 2, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+    munmap(buffer+buffer_len, buffer_len);
+    char* mmaped_corpus = strcpy(buffer + buffer_len - strlen(corpus) - 1, corpus);
+
+    hs_error_t err;
+    hs_scratch_t *scratch = nullptr;
+    hs_database_t *db = buildDBAndScratch(pattern, HS_FLAG_CASELESS, 0, HS_MODE_BLOCK, &scratch);
+
+    int count = 0;
+    err = hs_scan(db, mmaped_corpus, strlen(mmaped_corpus), 0, scratch, countHandler, &count);
+    ASSERT_EQ(HS_SUCCESS, err) << "hs_scan didn't return HS_SCAN_TERMINATED";
+
+    err = hs_free_scratch(scratch);
+    ASSERT_EQ(HS_SUCCESS, err);
+    hs_free_database(db);
+    munmap(buffer, buffer_len);
+}
 
 } // namespace
 

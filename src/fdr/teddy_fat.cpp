@@ -283,7 +283,7 @@ hwlm_error_t fdr_exec_fat_teddy_512vbmi_templ(const struct FDR *fdr,
     if (likely(ptr + loopBytes <= buf_end)) {
         u64a k0 = FAT_TEDDY_VBMI_CONF_MASK_HEAD;
         m512 p_mask0 = set_mask_m512(~((k0 << 32) | k0));
-        m512 r_0 = prep_conf_fat_teddy_512vbmi_templ<NMSK>(&lo_mask, dup_mask, sl_msk, set2x256(loadu256(ptr)));
+        m512 r_0 = prep_conf_fat_teddy_512vbmi_templ<NMSK>(&lo_mask, dup_mask, sl_msk, set2x256(loadu_maskz_m256(k0, ptr)));
 
         r_0 = or512(r_0, p_mask0);
         CONFIRM_FAT_TEDDY_512(r_0, 16, 0, VECTORING, ptr);
