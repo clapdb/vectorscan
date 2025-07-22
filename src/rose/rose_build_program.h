@@ -57,9 +57,9 @@ public:
     RoseProgram();
     ~RoseProgram();
     RoseProgram(const RoseProgram &) = delete;
-    RoseProgram(RoseProgram &&);
+    RoseProgram(RoseProgram &&) noexcept;
     RoseProgram &operator=(const RoseProgram &) = delete;
-    RoseProgram &operator=(RoseProgram &&);
+    RoseProgram &operator=(RoseProgram &&) noexcept;
 
     bool empty() const;
 
@@ -243,7 +243,7 @@ RoseProgram makeLiteralProgram(const RoseBuildImpl &build,
                     bool is_anchored_replay_program);
 
 RoseProgram makeDelayRebuildProgram(const RoseBuildImpl &build,
-                                    ProgramBuild &prog_build,
+                                    ProgramBuild const &prog_build,
                                     const std::vector<u32> &lit_ids);
 
 RoseProgram makeEodAnchorProgram(const RoseBuildImpl &build,

@@ -49,7 +49,7 @@ void readRow(sqlite3_stmt *statement, vector<DataBlock> &blocks,
              map<unsigned int, unsigned int> &stream_indices) {
     unsigned int id = sqlite3_column_int(statement, 0);
     unsigned int stream_id = sqlite3_column_int(statement, 1);
-    const char *blob = (const char *)sqlite3_column_blob(statement, 2);
+    const char *blob = reinterpret_cast<const char *>(sqlite3_column_blob(statement, 2));
     unsigned int bytes = sqlite3_column_bytes(statement, 2);
 
     if (!contains(stream_indices, stream_id)) {
@@ -78,7 +78,7 @@ vector<DataBlock> readCorpus(const string &filename) {
         ostringstream err;
         err << "Unable to open database '" << filename << "': "
             << sqlite3_errmsg(db);
-        status = sqlite3_close(db);
+        status = sqlite3_close(db); //NOLINT (clang-analyzer-deadcode.DeadStores)
         assert(status == SQLITE_OK);
         throw DataCorpusError(err.str());
     }
@@ -91,9 +91,9 @@ vector<DataBlock> readCorpus(const string &filename) {
     status = sqlite3_prepare_v2(db, query.c_str(), query.size(), &statement,
                                 nullptr);
     if (status != SQLITE_OK) {
-        status = sqlite3_finalize(statement);
+        status = sqlite3_finalize(statement);   //NOLINT (clang-analyzer-deadcode.DeadStores)
         assert(status == SQLITE_OK);
-        status = sqlite3_close(db);
+        status = sqlite3_close(db);         //NOLINT (clang-analyzer-deadcode.DeadStores)
         assert(status == SQLITE_OK);
 
         ostringstream oss;
@@ -115,17 +115,17 @@ vector<DataBlock> readCorpus(const string &filename) {
         oss << "Error retrieving blocks from corpus: "
             << sqlite3_errmsg(db);
 
-        status = sqlite3_finalize(statement);
+        status = sqlite3_finalize(statement);   //NOLINT (clang-analyzer-deadcode.DeadStores)
         assert(status == SQLITE_OK);
-        status = sqlite3_close(db);
+        status = sqlite3_close(db);             //NOLINT (clang-analyzer-deadcode.DeadStores)
         assert(status == SQLITE_OK);
 
         throw DataCorpusError(oss.str());
     }
 
-    status = sqlite3_finalize(statement);
+    status = sqlite3_finalize(statement);       //NOLINT (clang-analyzer-deadcode.DeadStores)
     assert(status == SQLITE_OK);
-    status = sqlite3_close(db);
+    status = sqlite3_close(db);                 //NOLINT (clang-analyzer-deadcode.DeadStores)
     assert(status == SQLITE_OK);
 
     if (blocks.empty()) {

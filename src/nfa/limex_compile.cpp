@@ -140,6 +140,7 @@ reindexByStateId(const unordered_map<NFAVertex, NFAStateSet> &in,
         for (size_t i = m.second.find_first(); i != m.second.npos;
              i = m.second.find_next(i)) {
             u32 state_id = indexToState[i];
+	    // cppcheck-suppress knownConditionTrueFalse
             if (state_id == NO_STATE) {
                 continue;
             }
@@ -269,7 +270,7 @@ void maskClear(Mask &m) {
 template<class Mask>
 u8 *maskGetByte(Mask &m, u32 bit) {
     assert(bit < sizeof(m)*8);
-    u8 *m8 = (u8 *)&m;
+    u8 *m8 = reinterpret_cast<u8 *>(&m);
 
     return m8 + bit/8;
 }
@@ -290,7 +291,7 @@ void maskSetBits(Mask &m, const NFAStateSet &bits) {
 
 template<class Mask>
 bool isMaskZero(Mask &m) {
-    u8 *m8 = (u8 *)&m;
+    const u8 *m8 = reinterpret_cast<u8 *>(&m);
     for (u32 i = 0; i < sizeof(m); i++) {
         if (m8[i]) {
             return false;
@@ -303,7 +304,7 @@ bool isMaskZero(Mask &m) {
 template<class Mask>
 void maskSetByte(Mask &m, const unsigned int idx, const char val) {
     assert(idx < sizeof(m));
-    char *m8 = (char *)&m;
+    char *m8 = reinterpret_cast<char *>(&m);
     char &byte = m8[idx];
     byte = val;
 }
@@ -329,11 +330,12 @@ void buildReachMapping(const build_info &args, vector<NFAStateSet> &reach,
     // Build a list of vertices with a state index assigned.
     vector<NFAVertex> verts;
     verts.reserve(args.num_states);
-    for (auto v : vertices_range(h)) {
-        if (state_ids.at(v) != NO_STATE) {
-            verts.emplace_back(v);
-        }
-    }
+    auto sidat = [&state_ids=state_ids](const NFAVertex &v) {
+        // cppcheck-suppress knownConditionTrueFalse
+        return (state_ids.at(v) != NO_STATE);
+    };
+    const auto &vr = vertices_range(h);
+    std::copy_if(begin(vr), end(vr),  std::back_inserter(verts), sidat);
 
     // Build a mapping from set-of-states -> reachability.
     map<NFAStateSet, CharReach> mapping;
@@ -482,6 +484,7 @@ bool allow_wide_accel(NFAVertex v, const NGHolder &g, NFAVertex sds_or_proxy) {
 static
 bool allow_wide_accel(const vector<NFAVertex> &vv, const NGHolder &g,
                       NFAVertex sds_or_proxy) {
+    // cppcheck-suppress useStlAlgorithm
     for (auto v : vv) {
         if (allow_wide_accel(v, g, sds_or_proxy)) {
             return true;
@@ -555,7 +558,8 @@ void filterAccelStates(NGHolder &g, const map<u32, set<NFAVertex>> &tops,
 
     // Similarly, connect (start, startDs) if necessary.
     if (!edge(g.start, g.startDs, g).second) {
-        NFAEdge e = add_edge(g.start, g.startDs, g);
+        NFAEdge e;
+        std::tie(e, std::ignore) = add_edge(g.start, g.startDs, g);
         tempEdges.emplace_back(e); // Remove edge later.
     }
 
@@ -584,6 +588,7 @@ bool containsBadSubset(const limex_accel_info &accel,
         subset = state_set;
         subset.reset(j);
 
+        // cppcheck-suppress knownConditionTrueFalse
         if (effective_sds != NO_STATE && subset.count() == 1 &&
             subset.test(effective_sds)) {
             continue;
@@ -623,7 +628,8 @@ void fillAccelInfo(build_info &bi) {
 
     vector<NFAVertex> astates;
     for (const auto &m : accel_map) {
-        astates.emplace_back(m.first);
+        // cppcheck-suppress useStlAlgorithm
+        astates.emplace_back(m.first);  //NOLINT (performance-inefficient-vector-operation)
     }
 
     NFAStateSet useful(num_states);
@@ -799,12 +805,14 @@ u32 getEffectiveAccelStates(const build_info &args,
             continue;
         }
         for (const auto &s_mask : args.squashMap | map_values) {
+            // cppcheck-suppress useStlAlgorithm
             if (!s_mask.test(state_id)) {
                 may_turn_off |= 1U << accel_id;
                 break;
             }
         }
         for (const auto &s_mask : args.reportSquashMap | map_values) {
+            // cppcheck-suppress useStlAlgorithm
             if (!s_mask.test(state_id)) {
                 may_turn_off |= 1U << accel_id;
                 break;
@@ -914,11 +922,13 @@ void buildAccel(const build_info &args, NFAStateSet &accelMask,
 
     // Start with the NONE case.
     auxvec.emplace_back(AccelAux());
+    // cppcheck-suppress memsetClassFloat
     memset(&auxvec[0], 0, sizeof(AccelAux));
     auxvec[0].accel_type = ACCEL_NONE; // no states on.
 
     AccelAux aux;
     for (u32 i = 1; i < accelCount; i++) {
+        // cppcheck-suppress memsetClassFloat
         memset(&aux, 0, sizeof(aux));
 
         NFAStateSet effective_states(args.num_states);
@@ -1064,7 +1074,7 @@ void buildAcceptsList(const build_info &args, ReportListCache &reports_cache,
             a.reports = addReports(h[v].reports, reports, reports_cache);
         }
         a.squash = addSquashMask(args, v, squash);
-        accepts.emplace_back(std::move(a));
+        accepts.emplace_back(a);
     }
 }
 
@@ -1083,6 +1093,7 @@ void buildAccepts(const build_info &args, ReportListCache &reports_cache,
     for (auto v : vertices_range(h)) {
         u32 state_id = args.state_ids.at(v);
 
+        // cppcheck-suppress knownConditionTrueFalse
         if (state_id == NO_STATE || !is_match_vertex(v, h)) {
             continue;
         }
@@ -1142,6 +1153,7 @@ u32 compressedStateSize(const NGHolder &h, const NFAStateSet &maskedStates,
 
     for (auto v : vertices_range(h)) {
         u32 i = state_ids.at(v);
+        // cppcheck-suppress knownConditionTrueFalse
         if (i == NO_STATE || maskedStates.test(i)) {
             continue;
         }
@@ -1167,6 +1179,7 @@ bool hasSquashableInitDs(const build_info &args) {
 
     NFAStateSet initDs(args.num_states);
     u32 sds_state = args.state_ids.at(h.startDs);
+    // cppcheck-suppress knownConditionTrueFalse
     if (sds_state == NO_STATE) {
         DEBUG_PRINTF("no states in initds\n");
         return false;
@@ -1208,10 +1221,11 @@ bool hasSquashableInitDs(const build_info &args) {
 static
 bool hasInitDsStates(const NGHolder &h,
                      const unordered_map<NFAVertex, u32> &state_ids) {
+    // cppcheck-suppress knownConditionTrueFalse
     if (state_ids.at(h.startDs) != NO_STATE) {
         return true;
     }
-
+    // cppcheck-suppress knownConditionTrueFalse
     if (is_triggered(h) && state_ids.at(h.start) != NO_STATE) {
         return true;
     }
@@ -1227,6 +1241,7 @@ void findMaskedCompressionStates(const build_info &args,
         // Rose leftfixes can mask out initds, which is worth doing if it will
         // stay on forever (i.e. it's not squashable).
         u32 sds_i = args.state_ids.at(h.startDs);
+        // cppcheck-suppress knownConditionTrueFalse
         if (sds_i != NO_STATE && !hasSquashableInitDs(args)) {
             maskedStates.set(sds_i);
             DEBUG_PRINTF("masking out initds state\n");
@@ -1242,6 +1257,7 @@ void findMaskedCompressionStates(const build_info &args,
         for (const auto &e : edges_range(h)) {
             u32 from = args.state_ids.at(source(e, h));
             u32 to = args.state_ids.at(target(e, h));
+            // cppcheck-suppress knownConditionTrueFalse
             if (from == NO_STATE) {
                 continue;
             }
@@ -1249,6 +1265,7 @@ void findMaskedCompressionStates(const build_info &args,
             // We cannot mask out EOD accepts, as they have to perform an
             // action after they're switched on that may be delayed until the
             // next stream write.
+            // cppcheck-suppress knownConditionTrueFalse
             if (to == NO_STATE && target(e, h) != h.acceptEod) {
                 continue;
             }
@@ -1399,6 +1416,7 @@ u32 buildExceptionMap(const build_info &args, ReportListCache &reports_cache,
     for (auto v : vertices_range(h)) {
         const u32 i = args.state_ids.at(v);
 
+        // cppcheck-suppress knownConditionTrueFalse
         if (i == NO_STATE) {
             continue;
         }
@@ -1481,6 +1499,8 @@ u32 buildExceptionMap(const build_info &args, ReportListCache &reports_cache,
                     continue;
                 }
                 u32 j = args.state_ids.at(w);
+                // j can be NO_STATE if args.state_ids.at(w) returns NO_STATE
+                // cppcheck-suppress knownConditionTrueFalse
                 if (j == NO_STATE) {
                     continue;
                 }
@@ -1553,6 +1573,7 @@ u32 findMaxVarShift(const build_info &args, u32 nShifts) {
     for (const auto &e : edges_range(h)) {
         u32 from = args.state_ids.at(source(e, h));
         u32 to = args.state_ids.at(target(e, h));
+        // cppcheck-suppress knownConditionTrueFalse
         if (from == NO_STATE || to == NO_STATE) {
             continue;
         }
@@ -1572,7 +1593,7 @@ u32 findMaxVarShift(const build_info &args, u32 nShifts) {
 static
 int getLimexScore(const build_info &args, u32 nShifts) {
     const NGHolder &h = args.h;
-    u32 maxVarShift = nShifts;
+    u32 maxVarShift;
     int score = 0;
 
     score += SHIFT_COST * nShifts;
@@ -1582,6 +1603,7 @@ int getLimexScore(const build_info &args, u32 nShifts) {
     for (const auto &e : edges_range(h)) {
         u32 from = args.state_ids.at(source(e, h));
         u32 to = args.state_ids.at(target(e, h));
+        // cppcheck-suppress knownConditionTrueFalse
         if (from == NO_STATE || to == NO_STATE) {
             continue;
         }
@@ -1678,7 +1700,7 @@ static
 bool cannotDie(const build_info &args) {
     const auto &h = args.h;
     const auto &state_ids = args.state_ids;
-
+    // cppcheck-suppress knownConditionTrueFalse
     // If we have a startDs we're actually using, we can't die.
     if (state_ids.at(h.startDs) != NO_STATE) {
         DEBUG_PRINTF("is using startDs\n");
@@ -1700,7 +1722,7 @@ struct Factory {
     static
     void allocState(NFA *nfa, u32 repeatscratchStateSize,
                     u32 repeatStreamState) {
-        implNFA_t *limex = (implNFA_t *)getMutableImplNfa(nfa);
+        const implNFA_t *limex = reinterpret_cast<implNFA_t *>(getMutableImplNfa(nfa));
 
         // LimEx NFAs now store the following in state:
         // 1. state bitvector (always present)
@@ -1766,7 +1788,7 @@ struct Factory {
             u32 tableOffset, tugMaskOffset;
             size_t len = repeatAllocSize(br, &tableOffset, &tugMaskOffset);
             auto info = make_zeroed_bytecode_ptr<NFARepeatInfo>(len);
-            char *info_ptr = (char *)info.get();
+            char *info_ptr = reinterpret_cast<char *>(info.get());
 
             // Collect state space info.
             RepeatStateInfo rsi(br.type, br.repeatMin, br.repeatMax, br.minPeriod);
@@ -1781,8 +1803,7 @@ struct Factory {
             info->tugMaskOffset = tugMaskOffset;
 
             // Fill the RepeatInfo structure.
-            RepeatInfo *repeat =
-                (RepeatInfo *)(info_ptr + sizeof(NFARepeatInfo));
+            RepeatInfo *repeat = reinterpret_cast<RepeatInfo *>(info_ptr + sizeof(NFARepeatInfo));
             repeat->type = br.type;
             repeat->repeatMin = depth_to_u32(br.repeatMin);
             repeat->repeatMax = depth_to_u32(br.repeatMax);
@@ -1808,7 +1829,7 @@ struct Factory {
             }
 
             // Fill the tug mask.
-            tableRow_t *tugMask = (tableRow_t *)(info_ptr + tugMaskOffset);
+            tableRow_t *tugMask = reinterpret_cast<tableRow_t *>(info_ptr + tugMaskOffset);
             for (auto v : br.tug_triggers) {
                 u32 state_id = args.state_ids.at(v);
                 assert(state_id != NO_STATE);
@@ -1831,6 +1852,7 @@ struct Factory {
         u32 s_i = args.state_ids.at(h.start);
         u32 sds_i = args.state_ids.at(h.startDs);
 
+        // cppcheck-suppress knownConditionTrueFalse
         if (s_i != NO_STATE) {
             maskSetBit(limex->init, s_i);
             if (is_triggered(h)) {
@@ -1838,6 +1860,7 @@ struct Factory {
             }
         }
 
+        // cppcheck-suppress knownConditionTrueFalse
         if (sds_i != NO_STATE) {
             maskSetBit(limex->init, sds_i);
             maskSetBit(limex->initDS, sds_i);
@@ -1873,6 +1896,7 @@ struct Factory {
         for (const auto &e : edges_range(h)) {
             u32 from = args.state_ids.at(source(e, h));
             u32 to = args.state_ids.at(target(e, h));
+            // cppcheck-suppress knownConditionTrueFalse
             if (from == NO_STATE || to == NO_STATE) {
                 continue;
             }
@@ -1911,6 +1935,7 @@ struct Factory {
         for (const auto &e : edges_range(h)) {
             u32 from = args.state_ids.at(source(e, h));
             u32 to = args.state_ids.at(target(e, h));
+            // cppcheck-suppress knownConditionTrueFalse
             if (from == NO_STATE || to == NO_STATE) {
                 continue;
             }
@@ -1929,7 +1954,7 @@ struct Factory {
                          const u32 reportListOffset) {
         DEBUG_PRINTF("exceptionsOffset=%u\n", exceptionsOffset);
 
-        exception_t *etable = (exception_t *)((char *)limex + exceptionsOffset);
+        exception_t *etable = reinterpret_cast<exception_t *>(reinterpret_cast<char *>(limex) + exceptionsOffset);
         assert(ISALIGNED(etable));
 
         map<u32, ExceptionProto> exception_by_state;
@@ -1977,10 +2002,10 @@ struct Factory {
         limex->exceptionCount = ecount;
 
         if (args.num_states > 64 && args.cc.target_info.has_avx512vbmi()) {
-            const u8 *exceptionMask = (const u8 *)(&limex->exceptionMask);
-            u8 *shufMask = (u8 *)&limex->exceptionShufMask;
-            u8 *bitMask = (u8 *)&limex->exceptionBitMask;
-            u8 *andMask = (u8 *)&limex->exceptionAndMask;
+            const u8 *exceptionMask = reinterpret_cast<const u8 *>(&limex->exceptionMask);
+            u8 *shufMask = reinterpret_cast<u8 *>(&limex->exceptionShufMask);
+            u8 *bitMask = reinterpret_cast<u8 *>(&limex->exceptionBitMask);
+            u8 *andMask = reinterpret_cast<u8 *>(&limex->exceptionAndMask);
 
             u32 tot_cnt = 0;
             u32 pos = 0;
@@ -2040,7 +2065,7 @@ struct Factory {
         copy(reachMap.begin(), reachMap.end(), &limex->reachMap[0]);
 
         // Reach table is right after the LimEx structure.
-        tableRow_t *reachMask = (tableRow_t *)((char *)limex + reachOffset);
+        tableRow_t *reachMask = reinterpret_cast<tableRow_t *>(reinterpret_cast<char *>(limex) + reachOffset);
         assert(ISALIGNED(reachMask));
         for (size_t i = 0, end = reach.size(); i < end; i++) {
             maskSetBits(reachMask[i], reach[i]);
@@ -2054,7 +2079,7 @@ struct Factory {
         DEBUG_PRINTF("topsOffset=%u\n", topsOffset);
 
         limex->topOffset = topsOffset;
-        tableRow_t *topMasks = (tableRow_t *)((char *)limex + topsOffset);
+        tableRow_t *topMasks = reinterpret_cast<tableRow_t *>(reinterpret_cast<char *>(limex) + topsOffset);
         assert(ISALIGNED(topMasks));
 
         for (size_t i = 0, end = tops.size(); i < end; i++) {
@@ -2066,8 +2091,8 @@ struct Factory {
 
     static
     void writeAccelSsse3Masks(const NFAStateSet &accelMask, implNFA_t *limex) {
-        char *perm_base = (char *)&limex->accelPermute;
-        char *comp_base = (char *)&limex->accelCompare;
+        char *perm_base = reinterpret_cast<char *>(&limex->accelPermute);
+        char *comp_base = reinterpret_cast<char *>(&limex->accelCompare);
 
         u32 num = 0; // index in accel table.
         for (size_t i = accelMask.find_first(); i != accelMask.npos;
@@ -2078,8 +2103,8 @@ struct Factory {
             // PSHUFB permute and compare masks
             size_t mask_idx = sizeof(u_128) * (state_id / 128U);
             DEBUG_PRINTF("mask_idx=%zu\n", mask_idx);
-            u_128 *perm = (u_128 *)(perm_base + mask_idx);
-            u_128 *comp = (u_128 *)(comp_base + mask_idx);
+            u_128 *perm = reinterpret_cast<u_128 *>(perm_base + mask_idx);
+            u_128 *comp = reinterpret_cast<u_128 *>(comp_base + mask_idx);
             maskSetByte(*perm, num, ((state_id % 128U) / 8U));
             maskSetByte(*comp, num, ~(1U << (state_id % 8U)));
         }
@@ -2097,11 +2122,11 @@ struct Factory {
         // Write accel lookup table.
         limex->accelTableOffset = accelTableOffset;
         copy(accelTable.begin(), accelTable.end(),
-             (u8 *)((char *)limex + accelTableOffset));
+             reinterpret_cast<u8 *>(reinterpret_cast<char *>(limex) + accelTableOffset));
 
         // Write accel aux structures.
         limex->accelAuxOffset = accelAuxOffset;
-        AccelAux *auxTable = (AccelAux *)((char *)limex + accelAuxOffset);
+        AccelAux *auxTable = reinterpret_cast<AccelAux *>(reinterpret_cast<char *>(limex) + accelAuxOffset);
         assert(ISALIGNED(auxTable));
         copy(accelAux.begin(), accelAux.end(), auxTable);
 
@@ -2131,7 +2156,7 @@ struct Factory {
                       const vector<NFAStateSet> &squash, implNFA_t *limex,
                       const u32 acceptsOffset, const u32 acceptsEodOffset,
                       const u32 squashOffset, const u32 reportListOffset) {
-        char *limex_base = (char *)limex;
+        char *limex_base = reinterpret_cast<char *>(limex);
 
         DEBUG_PRINTF("acceptsOffset=%u, acceptsEodOffset=%u, squashOffset=%u\n",
                      acceptsOffset, acceptsEodOffset, squashOffset);
@@ -2154,7 +2179,7 @@ struct Factory {
         limex->acceptOffset = acceptsOffset;
         limex->acceptCount = verify_u32(accepts.size());
         DEBUG_PRINTF("NFA has %zu accepts\n", accepts.size());
-        NFAAccept *acceptsTable = (NFAAccept *)(limex_base + acceptsOffset);
+        NFAAccept *acceptsTable = reinterpret_cast<NFAAccept *>(limex_base + acceptsOffset);
         assert(ISALIGNED(acceptsTable));
         transform(accepts.begin(), accepts.end(), acceptsTable,
                   transform_offset_fn);
@@ -2163,7 +2188,7 @@ struct Factory {
         limex->acceptEodOffset = acceptsEodOffset;
         limex->acceptEodCount = verify_u32(acceptsEod.size());
         DEBUG_PRINTF("NFA has %zu EOD accepts\n", acceptsEod.size());
-        NFAAccept *acceptsEodTable = (NFAAccept *)(limex_base + acceptsEodOffset);
+        NFAAccept *acceptsEodTable = reinterpret_cast<NFAAccept *>(limex_base + acceptsEodOffset);
         assert(ISALIGNED(acceptsEodTable));
         transform(acceptsEod.begin(), acceptsEod.end(), acceptsEodTable,
                   transform_offset_fn);
@@ -2172,7 +2197,7 @@ struct Factory {
         limex->squashCount = verify_u32(squash.size());
         limex->squashOffset = squashOffset;
         DEBUG_PRINTF("NFA has %zu report squash masks\n", squash.size());
-        tableRow_t *mask = (tableRow_t *)(limex_base + squashOffset);
+        tableRow_t *mask = reinterpret_cast<tableRow_t *>(limex_base + squashOffset);
         assert(ISALIGNED(mask));
         for (size_t i = 0, end = squash.size(); i < end; i++) {
             maskSetBits(mask[i], squash[i]);
@@ -2194,13 +2219,13 @@ struct Factory {
         for (u32 i = 0; i < num_repeats; i++) {
             repeatOffsets[i] = offset;
             assert(repeats[i]);
-            memcpy((char *)limex + offset, repeats[i].get(), repeats[i].size());
+            memcpy(reinterpret_cast<char *>(limex) + offset, repeats[i].get(), repeats[i].size());
             offset += repeats[i].size();
         }
 
         // Write repeat offset lookup table.
-        assert(ISALIGNED_N((char *)limex + repeatOffsetsOffset, alignof(u32)));
-        copy_bytes((char *)limex + repeatOffsetsOffset, repeatOffsets);
+        assert(ISALIGNED_N(reinterpret_cast<char *>(limex) + repeatOffsetsOffset, alignof(u32)));
+        copy_bytes(reinterpret_cast<char *>(limex) + repeatOffsetsOffset, repeatOffsets);
 
         limex->repeatOffset = repeatOffsetsOffset;
         limex->repeatCount = num_repeats;
@@ -2210,15 +2235,15 @@ struct Factory {
     void writeReportList(const vector<ReportID> &reports, implNFA_t *limex,
                          const u32 reportListOffset) {
         DEBUG_PRINTF("reportListOffset=%u\n", reportListOffset);
-        assert(ISALIGNED_N((char *)limex + reportListOffset,
+        assert(ISALIGNED_N(reinterpret_cast<char *>(limex) + reportListOffset,
                            alignof(ReportID)));
-        copy_bytes((char *)limex + reportListOffset, reports);
+        copy_bytes(reinterpret_cast<char *>(limex) + reportListOffset, reports);
     }
 
     static
     bytecode_ptr<NFA> generateNfa(const build_info &args) {
         if (args.num_states > NFATraits<dtype>::maxStates) {
-            return nullptr;
+            return bytecode_ptr<NFA>(nullptr);
         }
 
         // Build bounded repeat structures.
@@ -2321,7 +2346,7 @@ struct Factory {
         auto nfa = make_zeroed_bytecode_ptr<NFA>(nfaSize);
         assert(nfa); // otherwise we would have thrown std::bad_alloc
 
-        implNFA_t *limex = (implNFA_t *)getMutableImplNfa(nfa.get());
+        implNFA_t *limex = reinterpret_cast<implNFA_t *>(getMutableImplNfa(nfa.get()));
         assert(ISALIGNED(limex));
 
         writeReachMapping(reach, reachMap, limex, reachOffset);
@@ -2453,6 +2478,7 @@ bool isSane(const NGHolder &h, const map<u32, set<NFAVertex>> &tops,
             return false;
         }
         const u32 i = state_ids.at(v);
+        // cppcheck-suppress knownConditionTrueFalse
         if (i == NO_STATE) {
             continue;
         }
@@ -2533,6 +2559,7 @@ bool isFast(const build_info &args) {
                     continue;
                 }
                 u32 j = args.state_ids.at(w);
+                // cppcheck-suppress knownConditionTrueFalse
                 if (j == NO_STATE) {
                     continue;
                 }
@@ -2577,7 +2604,7 @@ bytecode_ptr<NFA> generate(NGHolder &h,
 
     if (!cc.grey.allowLimExNFA) {
         DEBUG_PRINTF("limex not allowed\n");
-        return nullptr;
+        return bytecode_ptr<NFA>(nullptr);
     }
 
     // If you ask for a particular type, it had better be an NFA.
@@ -2612,7 +2639,7 @@ bytecode_ptr<NFA> generate(NGHolder &h,
 
     if (scores.empty()) {
         DEBUG_PRINTF("No NFA returned a valid score for this case.\n");
-        return nullptr;
+        return bytecode_ptr<NFA>(nullptr);
     }
 
     // Sort acceptable models in priority order, lowest score first.
@@ -2631,7 +2658,7 @@ bytecode_ptr<NFA> generate(NGHolder &h,
     }
 
     DEBUG_PRINTF("NFA build failed.\n");
-    return nullptr;
+    return bytecode_ptr<NFA>(nullptr);
 }
 
 u32 countAccelStates(NGHolder &h,

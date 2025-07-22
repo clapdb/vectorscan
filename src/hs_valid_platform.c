@@ -1,5 +1,6 @@
 /*
  * Copyright (c) 2016-2017, Intel Corporation
+ * Copyright (c) 2020-2023, VectorCamp PC
  *
  * Redistribution and use in source and binary forms, with or without
  * modification, are permitted provided that the following conditions are met:
@@ -29,28 +30,33 @@
 #include "config.h"
 #include "hs_common.h"
 #include "ue2common.h"
+#if !defined(VS_SIMDE_BACKEND)
 #if defined(ARCH_IA32) || defined(ARCH_X86_64)
 #include "util/arch/x86/cpuid_inline.h"
 #elif defined(ARCH_AARCH64)
 #include "util/arch/arm/cpuid_inline.h"
 #endif
+#endif
 
 HS_PUBLIC_API
 hs_error_t HS_CDECL hs_valid_platform(void) {
-    /* Hyperscan requires SSSE3, anything else is a bonus */
-#if defined(ARCH_IA32) || defined(ARCH_X86_64)
-    if (check_ssse3()) {
+    /* Vectorscan requires SSE4.2, anything else is a bonus */
+#if !defined(VS_SIMDE_BACKEND) && (defined(ARCH_IA32) || defined(ARCH_X86_64))
+    // cppcheck-suppress knownConditionTrueFalse
+    if (check_sse42()) {
         return HS_SUCCESS;
     } else {
         return HS_ARCH_ERROR;
     }
-#elif defined(ARCH_ARM32) || defined(ARCH_AARCH64)
+#elif !defined(VS_SIMDE_BACKEND) && (defined(ARCH_ARM32) || defined(ARCH_AARCH64))
+   //check_neon returns true for now
+   // cppcheck-suppress knownConditionTrueFalse
    if (check_neon()) {
         return HS_SUCCESS;
     } else {
         return HS_ARCH_ERROR;
     }
-#elif defined(ARCH_PPC64EL)
-    return HS_SUCCESS;    
+#elif defined(ARCH_PPC64EL) || defined(VS_SIMDE_BACKEND)
+    return HS_SUCCESS;
 #endif
 }

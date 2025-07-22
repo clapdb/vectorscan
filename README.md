@@ -1,8 +1,12 @@
 # About Vectorscan
 
 A fork of Intel's Hyperscan, modified to run on more platforms. Currently ARM NEON/ASIMD
-is 100% functional, and Power VSX are in development. ARM SVE2 support is in ongoing with
+and Power VSX are 100% functional. ARM SVE2 support is in ongoing with
 access to hardware now. More platforms will follow in the future.
+Further more, starting 5.4.12 there is now a [SIMDe](https://github.com/simd-everywhere/simde)
+port, which can be either used for platforms without official SIMD support,
+as SIMDe can emulate SIMD instructions, or as an alternative backend for existing architectures,
+for reference and comparison purposes.
 
 Vectorscan will follow Intel's API and internal algorithms where possible, but will not
 hesitate to make code changes where it is thought of giving better performance or better
@@ -94,7 +98,7 @@ some small but necessary changes were made that might break compatibility with h
 In order to build on Debian/Ubuntu make sure you install the following build-dependencies
 
 ```
-$ sudo apt build-essential cmake ragel pkg-config libsqlite3-dev libpcap-dev
+$ sudo apt install build-essential cmake ragel pkg-config libsqlite3-dev libpcap-dev
 ```
 
 ### Other distributions
@@ -108,6 +112,69 @@ Assuming an existing HomeBrew installation:
 ```
 % brew install boost cmake gcc libpcap pkg-config ragel sqlite
 ```
+
+### *BSD
+In NetBSD you will almost certainly need to have a newer compiler installed. 
+Also you will need to install cmake, sqlite, boost and ragel. 
+Also, libpcap is necessary for some of the benchmarks, so let's install that 
+as well.
+When using pkgsrc, you would typically do this using something
+similar to
+```
+pkg_add gcc12-12.3.0.tgz
+pkg_add boost-headers-1.83.0.tgz  boost-jam-1.83.0.tgz      boost-libs-1.83.0nb1.tgz
+pkg_add ragel-6.10.tgz
+pkg_add cmake-3.28.1.tgz
+pkg_add sqlite3-3.44.2.tgz
+pkg_add libpcap-1.10.4.tgz
+```
+Version numbers etc will of course vary. One would either download the
+binary packages or build them using pkgsrc. There exist some NetBSD pkg 
+tools like ```pkgin``` which help download e.g. dependencies as binary packages,
+but overall NetBSD leaves a lot of detail exposed to the user.
+The main package system used in NetBSD is pkgsrc and one will probably
+want to read up more about it than is in the scope of this document.
+See https://www.netbsd.org/docs/software/packages.html for more information.
+
+This will not replace the compiler in the standard base distribution, and
+cmake will probably find the base dist's compiler when it checks automatically.
+Using the example of gcc12 from pkgsrc, one will need to set two
+environment variables before starting: 
+```
+export CC="/usr/pkg/gcc12/bin/cc"
+export CXX="/usr/pkg/gcc12/bin/g++"
+```
+
+In FreeBSD similarly, you might want to install a different compiler.
+If you want to use gcc, it is recommended to use gcc12.
+You will also, as in NetBSD, need to install cmake, sqlite, boost and ragel packages.
+Using the example of gcc12 from pkg:
+installing the desired compiler: 
+```
+pkg install gcc12
+pkg install boost-all
+pkg install ragel
+pkg install cmake
+pkg install sqlite
+pkg install libpcap
+pkg install ccache
+```
+and then before beginning the cmake and build process, set
+the environment variables to point to this compiler: 
+```
+export CC="/usr/local/bin/gcc"
+export CXX="/usr/local/bin/g++"
+```
+A further note in FreeBSD, on the PowerPC and ARM platforms, 
+the gcc12 package installs to a slightly different name, on FreeBSD/ppc, 
+gcc12 will be found using: 
+```
+export CC="/usr/local/bin/gcc12"
+export CXX="/usr/local/bin/g++12"
+```
+
+Then continue with the build as below. 
+
 
 ## Configure & build
 
@@ -147,6 +214,11 @@ Common options for Cmake are:
 ## Other options
 
 * `SANITIZE=[address|memory|undefined]` (experimental) Use `libasan` sanitizer to detect possible bugs. For now only `address` is tested. This will eventually be integrated in the CI.
+
+## SIMDe options
+
+* `SIMDE_BACKEND=[On|Off]` Enable SIMDe backend. If this is chosen all native (SSE/AVX/AVX512/Neon/SVE/VSX) backends will be disabled and a SIMDe SSE4.2 emulation backend will be enabled. This will enable Vectorscan to build and run on architectures without SIMD.
+* `SIMDE_NATIVE=[On|Off]` Enable SIMDe native emulation of x86 SSE4.2 intrinsics on the building platform. That is, SSE4.2 intrinsics will be emulated using Neon on an Arm platform, or VSX on a Power platform, etc.
 
 ## Build
 

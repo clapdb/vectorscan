@@ -298,7 +298,7 @@ void get_conf_stride_4(const u8 *itPtr, UNUSED const u8 *start_ptr,
 static really_inline
 void do_confirm_fdr(u64a *conf, u8 offset, hwlmcb_rv_t *control,
                     const u32 *confBase, const struct FDR_Runtime_Args *a,
-                    const u8 *ptr, u32 *last_match_id, struct zone *z) {
+                    const u8 *ptr, u32 *last_match_id, const struct zone *z) {
     const u8 bucket = 8;
 
     if (likely(!*conf)) {
@@ -308,7 +308,7 @@ void do_confirm_fdr(u64a *conf, u8 offset, hwlmcb_rv_t *control,
     /* ptr is currently referring to a location in the zone's buffer, we also
      * need a pointer in the original, main buffer for the final string compare.
      */
-    const u8 *ptr_main = (const u8 *)((uintptr_t)ptr + z->zone_pointer_adjust);
+    const u8 *ptr_main = (const u8 *)((uintptr_t)ptr + z->zone_pointer_adjust); //NOLINT (performance-no-int-to-ptr)
 
     const u8 *confLoc = ptr;
 
@@ -333,7 +333,7 @@ void do_confirm_fdr(u64a *conf, u8 offset, hwlmcb_rv_t *control,
 }
 
 static really_inline
-void dumpZoneInfo(UNUSED struct zone *z, UNUSED size_t zone_id) {
+void dumpZoneInfo(UNUSED const struct zone *z, UNUSED size_t zone_id) {
 #ifdef DEBUG
     DEBUG_PRINTF("zone: zone=%zu, bufPtr=%p\n", zone_id, z->buf);
     DEBUG_PRINTF("zone: startPtr=%p, endPtr=%p, shift=%u\n",

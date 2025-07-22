@@ -1,6 +1,7 @@
 /*
  * Copyright (c) 2015-2017, Intel Corporation
- * Copyright (c) 2020-2021, VectorCamp PC
+ * Copyright (c) 2020-2023, VectorCamp PC
+ * Copyright (c) 2023, Arm Limited
  *
  * Redistribution and use in source and binary forms, with or without
  * modification, are permitted provided that the following conditions are met:
@@ -41,10 +42,26 @@
 #include "util/supervector/supervector.hpp"
 #include "util/match.hpp"
 
+#ifdef HAVE_SVE
+static really_inline
+svuint8_t blockSingleMask(svuint8_t shuf_mask_lo_highclear, svuint8_t shuf_mask_lo_highset, svuint8_t chars);
+
+static really_inline
+svuint8_t blockSingleMaskWide32(svuint8_t shuf_mask_32, svuint8_t chars);
+
+#ifdef HAVE_SVE2
+static really_inline
+svuint8_t blockSingleMaskWide(svuint8_t shuf_mask_lo_highclear, svuint8_t shuf_mask_lo_highset, svuint8_t chars);
+#endif //HAVE_SVE2
+#else
 template <uint16_t S>
 static really_inline
 const SuperVector<S> blockSingleMask(SuperVector<S> shuf_mask_lo_highclear, SuperVector<S> shuf_mask_lo_highset, SuperVector<S> chars);
+#endif //HAVE_SVE
 
+#if defined(VS_SIMDE_BACKEND)
+#include "x86/truffle.hpp"
+#else
 #if defined(ARCH_IA32) || defined(ARCH_X86_64)
 #include "x86/truffle.hpp"
 #elif defined(ARCH_ARM32) || defined(ARCH_AARCH64)
@@ -52,7 +69,197 @@ const SuperVector<S> blockSingleMask(SuperVector<S> shuf_mask_lo_highclear, Supe
 #elif defined(ARCH_PPC64EL)
 #include "ppc64el/truffle.hpp"
 #endif
+#endif
 
+#ifdef HAVE_SVE
+template <bool is_wide, bool is_vector_128b>
+static really_inline
+const u8 *truffleExecSVE(m256 shuf_mask_32,
+                      const u8 *buf, const u8 *buf_end);
+
+template <bool is_wide, bool is_vector_128b>
+static really_inline
+const u8 *rtruffleExecSVE(m256 shuf_mask_32,
+                       const u8 *buf, const u8 *buf_end);
+
+template <bool is_wide, bool is_vector_128b>
+static really_inline
+const u8 *scanBlock(svuint8_t shuf_mask_lo_highclear, svuint8_t shuf_mask_lo_highset,
+                    svuint8_t chars, const u8 *buf, const size_t vector_size_int_8, bool forward)
+{
+    svuint8_t result_mask;
+    if(is_wide) {
+        if(is_vector_128b) {
+#ifdef HAVE_SVE2
+            result_mask = blockSingleMaskWide(shuf_mask_lo_highclear, shuf_mask_lo_highset, chars);
+#else
+            DEBUG_PRINTF("Wide Truffle is not supported with 128b vectors unless SVE2 is enabled");
+            assert(false);
+#endif
+        } else {
+            result_mask = blockSingleMaskWide32(shuf_mask_lo_highclear, chars);
+        }
+    } else {
+        result_mask = blockSingleMask(shuf_mask_lo_highclear, shuf_mask_lo_highset, chars);
+    }
+    uint64_t index;
+    if (forward) {
+        index = first_non_zero(vector_size_int_8, result_mask); //NOLINT (clang-analyzer-core.CallAndMessage)
+    } else {
+        index = last_non_zero(vector_size_int_8, result_mask); //NOLINT (clang-analyzer-core.CallAndMessage)
+    }
+
+    if (index < vector_size_int_8) {
+        return buf+index;
+    } else {
+        return NULL;
+    }
+}
+
+template <bool is_wide, bool is_vector_128b>
+static really_inline
+const u8 *truffleExecSVE(m256 shuf_mask_32, const u8 *buf, const u8 *buf_end) {
+    const int vect_size_int8 = svcntb();
+    assert(buf && buf_end);
+    assert(buf < buf_end);
+    DEBUG_PRINTF("truffle %p len %zu\n", buf, buf_end - buf);
+    DEBUG_PRINTF("b %s\n", buf);
+
+    svuint8_t wide_shuf_mask_lo_highclear;
+    svuint8_t wide_shuf_mask_lo_highset;
+    if (is_wide && !is_vector_128b) {
+        const svbool_t lane_pred_32 = svwhilelt_b8(0, 32);
+        wide_shuf_mask_lo_highclear = svld1(lane_pred_32, (uint8_t*) &shuf_mask_32.lo);
+        wide_shuf_mask_lo_highset = svld1(svpfalse(), (uint8_t*) &shuf_mask_32.hi); /* empty vector */
+    } else {
+        const svbool_t lane_pred_16 = svwhilelt_b8(0, 16);
+        wide_shuf_mask_lo_highclear = svld1(lane_pred_16, (uint8_t*) &shuf_mask_32.lo);
+        wide_shuf_mask_lo_highset = svld1(lane_pred_16, (uint8_t*) &shuf_mask_32.hi);
+    }
+
+    const u8 *work_buffer = buf;
+    const u8 *ret_val;
+
+    DEBUG_PRINTF("start %p end %p \n", work_buffer, buf_end);
+    assert(work_buffer < buf_end);
+
+    __builtin_prefetch(work_buffer + 16*64);
+
+    if (work_buffer + vect_size_int8 <= buf_end) {
+        // Reach vector aligned boundaries
+        DEBUG_PRINTF("until aligned %p \n", ROUNDUP_PTR(work_buffer, vect_size_int8));
+        if (!ISALIGNED_N(work_buffer, vect_size_int8)) {
+            svuint8_t chars = svld1(svptrue_b8(), work_buffer);
+            const u8 *alligned_buffer = ROUNDUP_PTR(work_buffer, vect_size_int8);
+            ret_val = scanBlock<is_wide, is_vector_128b>(wide_shuf_mask_lo_highclear, wide_shuf_mask_lo_highset, chars, work_buffer, vect_size_int8, true);
+            if (ret_val && ret_val < alligned_buffer) return ret_val;
+            work_buffer = alligned_buffer;
+        }
+
+        while (work_buffer + vect_size_int8 <= buf_end) {
+            __builtin_prefetch(work_buffer + 16*64);
+            DEBUG_PRINTF("work_buffer %p \n", work_buffer);
+            svuint8_t chars = svld1(svptrue_b8(), work_buffer);
+            ret_val = scanBlock<is_wide, is_vector_128b>(wide_shuf_mask_lo_highclear, wide_shuf_mask_lo_highset, chars, work_buffer, vect_size_int8, true);
+            if (ret_val) return ret_val;
+            work_buffer += vect_size_int8;
+        }
+    }
+
+    DEBUG_PRINTF("work_buffer %p e %p \n", work_buffer, buf_end);
+    // finish off tail
+
+    if (work_buffer != buf_end) {
+        svuint8_t chars;
+        const u8* end_buf;
+        if (buf_end - buf < vect_size_int8) {
+            const svbool_t remaining_lanes = svwhilelt_b8(0ll, buf_end - buf);
+            chars = svld1(remaining_lanes, buf);
+            end_buf = buf;
+        } else {
+            chars = svld1(svptrue_b8(), buf_end - vect_size_int8);
+            end_buf = buf_end - vect_size_int8;
+        }
+        ret_val = scanBlock<is_wide, is_vector_128b>(wide_shuf_mask_lo_highclear, wide_shuf_mask_lo_highset, chars, end_buf, vect_size_int8, true);
+        DEBUG_PRINTF("ret_val %p \n", ret_val);
+        if (ret_val && ret_val < buf_end) return ret_val;
+    }
+
+    return buf_end;
+}
+
+template <bool is_wide, bool is_vector_128b>
+static really_inline
+const u8 *rtruffleExecSVE(m256 shuf_mask_32, const u8 *buf, const u8 *buf_end){
+    const int vect_size_int8 = svcntb();
+    assert(buf && buf_end);
+    assert(buf < buf_end);
+    DEBUG_PRINTF("truffle %p len %zu\n", buf, buf_end - buf);
+    DEBUG_PRINTF("b %s\n", buf);
+
+    svuint8_t wide_shuf_mask_lo_highclear;
+    svuint8_t wide_shuf_mask_lo_highset;
+    if (is_wide && !is_vector_128b) {
+        const svbool_t lane_pred_32 = svwhilelt_b8(0, 32);
+        wide_shuf_mask_lo_highclear = svld1(lane_pred_32, (uint8_t*) &shuf_mask_32.lo);
+        wide_shuf_mask_lo_highset = svld1(svpfalse(), (uint8_t*) &shuf_mask_32.hi); /* empty vector */
+    } else {
+        const svbool_t lane_pred_16 = svwhilelt_b8(0, 16);
+        wide_shuf_mask_lo_highclear = svld1(lane_pred_16, (uint8_t*) &shuf_mask_32.lo);
+        wide_shuf_mask_lo_highset = svld1(lane_pred_16, (uint8_t*) &shuf_mask_32.hi);
+    }
+
+    const u8 *work_buffer = buf_end;
+    const u8 *ret_val;
+
+    DEBUG_PRINTF("start %p end %p \n", buf, work_buffer);
+    assert(work_buffer > buf);
+
+    __builtin_prefetch(work_buffer - 16*64);
+
+    if (work_buffer - vect_size_int8 >= buf) {
+        // Reach vector aligned boundaries
+        DEBUG_PRINTF("until aligned %p \n", ROUNDDOWN_PTR(work_buffer, vect_size_int8));
+        if (!ISALIGNED_N(work_buffer, vect_size_int8)) {
+            svuint8_t chars = svld1(svptrue_b8(), work_buffer - vect_size_int8);
+            const u8 *alligned_buffer = ROUNDDOWN_PTR(work_buffer, vect_size_int8);
+            ret_val = scanBlock<is_wide, is_vector_128b>(wide_shuf_mask_lo_highclear, wide_shuf_mask_lo_highset, chars, work_buffer - vect_size_int8, vect_size_int8, false);
+            DEBUG_PRINTF("ret_val %p \n", ret_val);
+            if (ret_val >= alligned_buffer) return ret_val;
+            work_buffer = alligned_buffer;
+        }
+
+        while (work_buffer - vect_size_int8 >= buf) {
+            DEBUG_PRINTF("aligned %p \n", work_buffer);
+            // On large packet buffers, this prefetch appears to get us about 2%.
+            __builtin_prefetch(work_buffer - 16*64);
+
+            work_buffer -= vect_size_int8;
+            svuint8_t chars = svld1(svptrue_b8(), work_buffer);
+            ret_val = scanBlock<is_wide, is_vector_128b>(wide_shuf_mask_lo_highclear, wide_shuf_mask_lo_highset, chars, work_buffer, vect_size_int8, false);
+            if (ret_val) return ret_val;
+        }
+    }
+
+    DEBUG_PRINTF("tail work_buffer %p e %p \n", buf, work_buffer);
+    // finish off head
+
+    if (work_buffer != buf) {
+        svuint8_t chars;
+        if (buf_end - buf < vect_size_int8) {
+            const svbool_t remaining_lanes = svwhilele_b8(0ll, buf_end - buf);
+            chars = svld1(remaining_lanes, buf);
+        } else {
+            chars = svld1(svptrue_b8(), buf);
+        }
+        ret_val = scanBlock<is_wide, is_vector_128b>(wide_shuf_mask_lo_highclear, wide_shuf_mask_lo_highset, chars, buf, vect_size_int8, false);
+        DEBUG_PRINTF("ret_val %p \n", ret_val);
+        if (ret_val && ret_val < buf_end) return ret_val;
+    }
+
+    return buf - 1;
+}
+#else
 template <uint16_t S>
 static really_inline
 const u8 *fwdBlock(SuperVector<S> shuf_mask_lo_highclear, SuperVector<S> shuf_mask_lo_highset, SuperVector<S> chars, const u8 *buf) {
@@ -61,7 +268,7 @@ const u8 *fwdBlock(SuperVector<S> shuf_mask_lo_highclear, SuperVector<S> shuf_ma
 }
 
 template <uint16_t S>
-const u8 *truffleExecReal(m128 &shuf_mask_lo_highclear, m128 shuf_mask_lo_highset, const u8 *buf, const u8 *buf_end) {
+const u8 *truffleExecReal(const m128 &shuf_mask_lo_highclear, m128 shuf_mask_lo_highset, const u8 *buf, const u8 *buf_end) {
     assert(buf && buf_end);
     assert(buf < buf_end);
     DEBUG_PRINTF("truffle %p len %zu\n", buf, buf_end - buf);
@@ -73,13 +280,7 @@ const u8 *truffleExecReal(m128 &shuf_mask_lo_highclear, m128 shuf_mask_lo_highse
     const u8 *d = buf;
     const u8 *rv;
 
-    DEBUG_PRINTF("start %p end %p \n", d, buf_end);
-    assert(d < buf_end);
-
-    __builtin_prefetch(d +   64);
-    __builtin_prefetch(d + 2*64);
-    __builtin_prefetch(d + 3*64);
-    __builtin_prefetch(d + 4*64);
+    __builtin_prefetch(d + 16*64);
     DEBUG_PRINTF("start %p end %p \n", d, buf_end);
     assert(d < buf_end);
     if (d + S <= buf_end) {
@@ -93,8 +294,8 @@ const u8 *truffleExecReal(m128 &shuf_mask_lo_highclear, m128 shuf_mask_lo_highse
             d = dup;
         }
 
-        while(d + S <= buf_end) {
-            __builtin_prefetch(d + 64);
+        while (d + S <= buf_end) {
+            __builtin_prefetch(d + 16*64);
             DEBUG_PRINTF("d %p \n", d);
             SuperVector<S> chars = SuperVector<S>::load(d);
             rv = fwdBlock(wide_shuf_mask_lo_highclear, wide_shuf_mask_lo_highset, chars, d);
@@ -110,7 +311,7 @@ const u8 *truffleExecReal(m128 &shuf_mask_lo_highclear, m128 shuf_mask_lo_highse
         SuperVector<S> chars = SuperVector<S>::Zeroes();
         const u8* end_buf;
         if (buf_end - buf < S) {
-          memcpy(&chars.u, buf, buf_end - buf);
+          memcpy(&chars.u, buf, buf_end - buf); //NOLINT (clang-analyzer-core.NonNullParamChecker)
           end_buf = buf;
         } else {
           chars = SuperVector<S>::loadu(buf_end - S);
@@ -145,10 +346,7 @@ const u8 *rtruffleExecReal(m128 shuf_mask_lo_highclear, m128 shuf_mask_lo_highse
     const u8 *d = buf_end;
     const u8 *rv;
 
-    __builtin_prefetch(d -   64);
-    __builtin_prefetch(d - 2*64);
-    __builtin_prefetch(d - 3*64);
-    __builtin_prefetch(d - 4*64);
+    __builtin_prefetch(d - 16*64);
     DEBUG_PRINTF("start %p end %p \n", buf, d);
     assert(d > buf);
     if (d - S >= buf) {
@@ -166,7 +364,7 @@ const u8 *rtruffleExecReal(m128 shuf_mask_lo_highclear, m128 shuf_mask_lo_highse
         while (d - S >= buf) {
             DEBUG_PRINTF("aligned %p \n", d);
             // On large packet buffers, this prefetch appears to get us about 2%.
-            __builtin_prefetch(d - 64);
+            __builtin_prefetch(d - 16*64);
 
             d -= S;
             SuperVector<S> chars = SuperVector<S>::load(d);
@@ -192,3 +390,4 @@ const u8 *rtruffleExecReal(m128 shuf_mask_lo_highclear, m128 shuf_mask_lo_highse
 
     return buf - 1;
 }
+#endif //HAVE_SVE

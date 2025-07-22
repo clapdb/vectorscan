@@ -155,13 +155,13 @@ u32 compress32_impl_c(u32 x, u32 m) {
         return 0;
     }
 
-    u32 mk, mp, mv, t;
+    u32 mk, mv;
 
     x &= m; // clear irrelevant bits
 
     mk = ~m << 1; // we will count 0's to right
     for (u32 i = 0; i < 5; i++) {
-        mp = mk ^ (mk << 1);
+        u32 mp = mk ^ (mk << 1);
         mp ^= mp << 2;
         mp ^= mp << 4;
         mp ^= mp << 8;
@@ -169,7 +169,7 @@ u32 compress32_impl_c(u32 x, u32 m) {
 
         mv = mp & m; // bits to move
         m = (m ^ mv) | (mv >> (1 << i)); // compress m
-        t = x & mv;
+        u32 t = x & mv;
         x = (x ^ t) | (t >> (1 << i)); // compress x
         mk = mk & ~mp;
     }
@@ -214,16 +214,22 @@ u64a compress64_impl_c(u64a x, u64a m) {
 }
 
 static really_inline
-m128 compress128_impl_c(m128 xvec, m128 mvec) {
-    u64a ALIGN_ATTR(16) x[2];
-    u64a ALIGN_ATTR(16) m[2];
-    store128(x, xvec);
-    store128(m, mvec);
+m128 compress128_impl_c(m128 x, m128 m) {
+    m128 one = set1_2x64(1);
+    m128 bitset = one;
+    m128 vres = zeroes128();
+    while (isnonzero128(m)) {
+	m128 mm = sub_2x64(zeroes128(), m);
+	m128 tv = and128(x, m);
+	tv = and128(tv, mm);
 
-    compress64_impl_c(x[0], m[0]);
-    compress64_impl_c(x[1], m[1]);
-
-    return xvec;
+	m128 mask = not128(eq64_m128(tv, zeroes128()));
+	mask = and128(bitset, mask);
+        vres = or128(vres, mask);
+	m = and128(m, sub_2x64(m, one));
+        bitset = lshift64_m128(bitset, 1);
+    }
+    return vres;
 }
 
 static really_inline
@@ -233,14 +239,14 @@ u32 expand32_impl_c(u32 x, u32 m) {
         return 0;
     }
 
-    u32 m0, mk, mp, mv, t;
+    u32 m0, mk, mv;
     u32 array[5];
 
     m0 = m; // save original mask
     mk = ~m << 1; // we will count 0's to right
 
     for (int i = 0; i < 5; i++) {
-        mp = mk ^ (mk << 1); // parallel suffix
+        u32 mp = mk ^ (mk << 1); // parallel suffix
         mp = mp ^ (mp << 2);
         mp = mp ^ (mp << 4);
         mp = mp ^ (mp << 8);
@@ -253,7 +259,7 @@ u32 expand32_impl_c(u32 x, u32 m) {
 
     for (int i = 4; i >= 0; i--) {
         mv = array[i];
-        t = x << (1 << i);
+        u32 t = x << (1 << i);
         x = (x & ~mv) | (t & mv);
     }
 
@@ -303,16 +309,20 @@ u64a expand64_impl_c(u64a x, u64a m) {
 }
 
 static really_inline
-m128 expand128_impl_c(m128 xvec, m128 mvec) {
-    u64a ALIGN_ATTR(16) x[2];
-    u64a ALIGN_ATTR(16) m[2];
-    store128(x, xvec);
-    store128(m, mvec);
-
-    expand64_impl_c(x[0], m[0]);
-    expand64_impl_c(x[1], m[1]);
-
-    return xvec;
+m128 expand128_impl_c(m128 x, m128 m) {
+    m128 one = set1_2x64(1);
+    m128 bb = one;
+    m128 res = zeroes128();
+    while (isnonzero128(m)) {
+	m128 xm = and128(x, bb);
+        m128 mm = sub_2x64(zeroes128(), m);
+        m128 mask = not128(eq64_m128(xm, zeroes128()));
+	mask = and128(mask, and128(m,mm));
+        res = or128(res, mask);
+        m = and128(m, sub_2x64(m, one));
+        bb = lshift64_m128(bb, 1);
+    }
+    return res;
 }
 
 /* returns the first set bit after begin (if not ~0U). If no bit is set after
@@ -399,7 +409,7 @@ u64a pdep64_impl_c(u64a x, u64a _m) {
     u64a result = 0x0UL;
     const u64a mask = 0x8000000000000000UL;
     u64a m = _m;
-    u64a c, t;
+    
     u64a p;
 
     /* The pop-count of the mask gives the number of the bits from
@@ -411,8 +421,8 @@ u64a pdep64_impl_c(u64a x, u64a _m) {
      each mask bit as it is processed.  */
     while (m != 0)
     {
-        c = __builtin_clzl (m);
-        t = x << (p - c);
+        u64a c = __builtin_clzl (m);
+        u64a t = x << (p - c);
         m ^= (mask >> c);
         result |= (t & (mask >> c));
         p++;

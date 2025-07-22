@@ -1,5 +1,6 @@
 /*
  * Copyright (c) 2015-2017, Intel Corporation
+ * Copyright (c) 2024, VectorCamp PC
  *
  * Redistribution and use in source and binary forms, with or without
  * modification, are permitted provided that the following conditions are met:
@@ -134,7 +135,12 @@
 #include <netinet/tcp.h>
 #include <netinet/udp.h>
 #include <netinet/ip_icmp.h>
+#ifdef __NetBSD__
+#include <net/ethertypes.h>
+#include <net/if_ether.h>
+#else
 #include <net/ethernet.h>
+#endif /* __NetBSD__ */
 #include <arpa/inet.h>
 
 #include <pcap.h>
@@ -196,15 +202,15 @@ struct FiveTuple {
     unsigned int dstPort;
 
     // Construct a FiveTuple from a TCP or UDP packet.
-    FiveTuple(const struct ip *iphdr) {
+    explicit FiveTuple(const struct ip *iphdr) {
         // IP fields
         protocol = iphdr->ip_p;
         srcAddr = iphdr->ip_src.s_addr;
         dstAddr = iphdr->ip_dst.s_addr;
 
         // UDP/TCP ports
-        const struct udphdr *uh = (const struct udphdr *)
-                (((const char *)iphdr) + (iphdr->ip_hl * 4));
+        const struct udphdr *uh = reinterpret_cast<const struct udphdr *>
+                ((reinterpret_cast<const char *>(iphdr)) + (iphdr->ip_hl * 4));
         srcPort = uh->uh_sport;
         dstPort = uh->uh_dport;
     }
@@ -233,7 +239,7 @@ static
 int onMatch(unsigned int id, unsigned long long from, unsigned long long to,
             unsigned int flags, void *ctx) {
     // Our context points to a size_t storing the match count
-    size_t *matches = (size_t *)ctx;
+    size_t *matches = static_cast<size_t *>(ctx);
     (*matches)++;
     return 0; // continue matching
 }
@@ -295,7 +301,7 @@ public:
         // database.
         hs_error_t err = hs_alloc_scratch(db, &scratch);
         if (err != HS_SUCCESS) {
-            cerr << "ERROR: could not allocate scratch space. Exiting." << endl;
+            cerr << "ERROR: could not allocate scratch space. Exiting.\n";
             exit(-1);
         }
     }
@@ -307,8 +313,7 @@ public:
         size_t scratch_size;
         hs_error_t err = hs_scratch_size(scratch, &scratch_size);
         if (err != HS_SUCCESS) {
-            cerr << "ERROR: could not query scratch space size. Exiting."
-                 << endl;
+            cerr << "ERROR: could not query scratch space size. Exiting.\n";
             exit(-1);
         }
         return scratch_size;
@@ -334,9 +339,9 @@ public:
             }
 
             // Valid TCP or UDP packet
-            const struct ip *iphdr = (const struct ip *)(pktData
+            const struct ip *iphdr = reinterpret_cast<const struct ip *>(pktData
                     + sizeof(struct ether_header));
-            const char *payload = (const char *)pktData + offset;
+            const char *payload = reinterpret_cast<const char *>(pktData) + offset;
 
             size_t id = stream_map.insert(std::make_pair(FiveTuple(iphdr),
                                           stream_map.size())).first->second;
@@ -352,9 +357,8 @@ public:
     // Return the number of bytes scanned
     size_t bytes() const {
         size_t sum = 0;
-        for (const auto &packet : packets) {
-            sum += packet.size();
-        }
+        auto packs = [](size_t z, const string &packet) { return z + packet.size(); };
+        sum += std::accumulate(packets.begin(), packets.end(), 0, packs);
         return sum;
     }
 
@@ -374,7 +378,7 @@ public:
         for (auto &stream : streams) {
             hs_error_t err = hs_open_stream(db, 0, &stream);
             if (err != HS_SUCCESS) {
-                cerr << "ERROR: Unable to open stream. Exiting." << endl;
+                cerr << "ERROR: Unable to open stream. Exiting.\n";
                 exit(-1);
             }
         }
@@ -383,11 +387,11 @@ public:
     // Close all open Hyperscan streams (potentially generating any
     // end-anchored matches)
     void closeStreams() {
-        for (auto &stream : streams) {
+        for (const auto &stream : streams) {
             hs_error_t err =
                 hs_close_stream(stream, scratch, onMatch, &matchCount);
             if (err != HS_SUCCESS) {
-                cerr << "ERROR: Unable to close stream. Exiting." << endl;
+                cerr << "ERROR: Unable to close stream. Exiting.\n";
                 exit(-1);
             }
         }
@@ -402,7 +406,7 @@ public:
                                             pkt.c_str(), pkt.length(), 0,
                                             scratch, onMatch, &matchCount);
             if (err != HS_SUCCESS) {
-                cerr << "ERROR: Unable to scan packet. Exiting." << endl;
+                cerr << "ERROR: Unable to scan packet. Exiting.\n";
                 exit(-1);
             }
         }
@@ -416,7 +420,7 @@ public:
             hs_error_t err = hs_scan(db, pkt.c_str(), pkt.length(), 0,
                                      scratch, onMatch, &matchCount);
             if (err != HS_SUCCESS) {
-                cerr << "ERROR: Unable to scan packet. Exiting." << endl;
+                cerr << "ERROR: Unable to scan packet. Exiting.\n";
                 exit(-1);
             }
         }
@@ -436,7 +440,7 @@ class Sigdata {
 
 public:
     Sigdata() {}
-    Sigdata(const char *filename) {
+    explicit Sigdata(const char *filename) {
         parseFile(filename, patterns, flags, ids, originals);
 
     }
@@ -454,9 +458,8 @@ public:
         // dynamic storage.)
         vector<const char *> cstrPatterns;
         cstrPatterns.reserve(patterns.size());
-        for (const auto &pattern : patterns) {
-            cstrPatterns.push_back(pattern.c_str());
-        }
+        auto pstr = [](const string &pattern) { return pattern.c_str(); };
+        std::transform(patterns.begin(), patterns.end(), std::back_inserter(cstrPatterns), pstr);
 
         Clock clock;
         clock.start();
@@ -505,29 +508,29 @@ public:
 
 static
 void usage(const char *) {
-    cerr << "Usage:" << endl << endl;
-    cerr << "  patbench [-n repeats] [ -G generations] [ -C criterion ]" << endl
+    cerr << "Usage:\n\n";
+    cerr << "  patbench [-n repeats] [ -G generations] [ -C criterion ]\n"
          << "           [ -F factor_group_size ] [ -N | -S ] "
-         << "<pattern file> <pcap file>" << endl << endl
+         << "<pattern file> <pcap file>\n\n"
          << "    -n repeats sets the number of times the PCAP is repeatedly "
-            "scanned" << endl << "       with the pattern." << endl
+            "scanned\n" << "       with the pattern.\n"
          << "    -G generations sets the number of generations that the "
-            "algorithm is" << endl << "       run for." << endl
+            "algorithm is\n" << "       run for.\n"
          << "    -N sets non-streaming mode, -S sets streaming mode (default)."
          << endl << "    -F sets the factor group size (must be >0); this "
-                    "allows the detection" << endl
-         << "       of multiple interacting factors." << endl << "" << endl
-         << "    -C sets the 'criterion', which can be either:" << endl
+                    "allows the detection\n"
+         << "       of multiple interacting factors.\n" << "\n"
+         << "    -C sets the 'criterion', which can be either:\n"
          << "         t  throughput (the default) - this requires a pcap file"
-         << endl << "         r  scratch size" << endl
-         << "         s  stream state size" << endl
-         << "         c  compile time" << endl << "         b  bytecode size"
+         << endl << "         r  scratch size\n"
+         << "         s  stream state size\n"
+         << "         c  compile time\n" << "         b  bytecode size"
          << endl << endl
          << "We recommend the use of a utility like 'taskset' on "
-            "multiprocessor hosts to" << endl
+            "multiprocessor hosts to\n"
          << "lock execution to a single processor: this will remove processor "
-            "migration" << endl
-         << "by the scheduler as a source of noise in the results." << endl;
+            "migration\n"
+         << "by the scheduler as a source of noise in the results.\n";
 }
 
 static
@@ -559,7 +562,7 @@ double measure_block_time(Benchmark &bench, unsigned int repeatCount) {
 }
 
 static
-double eval_set(Benchmark &bench, Sigdata &sigs, unsigned int mode,
+double eval_set(Benchmark &bench, const Sigdata &sigs, unsigned int mode,
                 unsigned repeatCount, Criterion criterion,
                 bool diagnose = true) {
     double compileTime = 0;
@@ -570,7 +573,7 @@ double eval_set(Benchmark &bench, Sigdata &sigs, unsigned int mode,
         size_t dbSize;
         hs_error_t err = hs_database_size(bench.getDatabase(), &dbSize);
         if (err != HS_SUCCESS) {
-            cerr << "ERROR: could not retrieve bytecode size" << endl;
+            cerr << "ERROR: could not retrieve bytecode size\n";
             exit(1);
         }
         return dbSize;
@@ -581,7 +584,7 @@ double eval_set(Benchmark &bench, Sigdata &sigs, unsigned int mode,
         size_t streamStateSize;
         hs_error_t err = hs_stream_size(bench.getDatabase(), &streamStateSize);
         if (err != HS_SUCCESS) {
-            cerr << "ERROR: could not retrieve stream state size" << endl;
+            cerr << "ERROR: could not retrieve stream state size\n";
             exit(1);
         }
         return streamStateSize;
@@ -599,8 +602,9 @@ double eval_set(Benchmark &bench, Sigdata &sigs, unsigned int mode,
         scan_time = measure_stream_time(bench, repeatCount);
     }
     size_t bytes = bench.bytes();
-    size_t matches = bench.matches();
+    
     if (diagnose) {
+        size_t matches = bench.matches();
         std::ios::fmtflags f(cout.flags());
         cout << "Scan time " << std::fixed << std::setprecision(3) << scan_time
              << " sec, Scanned " << bytes * repeatCount << " bytes, Throughput "
@@ -679,14 +683,13 @@ int main(int argc, char **argv) {
     Benchmark bench;
     if (criterion == CRITERION_THROUGHPUT) {
         if (!bench.readStreams(pcapFile)) {
-            cerr << "Unable to read packets from PCAP file. Exiting." << endl;
+            cerr << "Unable to read packets from PCAP file. Exiting.\n";
             exit(-1);
         }
     }
 
     if ((criterion == CRITERION_STREAM_STATE) && (mode != HS_MODE_STREAM)) {
-        cerr << "Cannot evaluate stream state for block mode compile. Exiting."
-             << endl;
+        cerr << "Cannot evaluate stream state for block mode compile. Exiting.\n";
         exit(-1);
     }
 
@@ -724,7 +727,7 @@ int main(int argc, char **argv) {
     unsigned generations = min(gen_max, (sigs.size() - 1) / factor_max);
 
     cout << "Cutting signatures cumulatively for " << generations
-         << " generations" << endl;
+         << " generations\n";
     for (unsigned gen = 0; gen < generations; ++gen) {
         cout << "Generation " << gen << " ";
         set<unsigned> s(work_sigs.begin(), work_sigs.end());
@@ -768,7 +771,7 @@ int main(int argc, char **argv) {
         cout << "Performance: ";
         print_criterion(criterion, best);
         cout << " (" << std::fixed << std::setprecision(3) << (best / score_base)
-             << "x) after cutting:" << endl;
+             << "x) after cutting:\n";
         cout.flags(out_f);
 
         // s now has factor_max signatures
@@ -791,7 +794,7 @@ int main(int argc, char **argv) {
 static
 bool payloadOffset(const unsigned char *pkt_data, unsigned int *offset,
                    unsigned int *length) {
-    const ip *iph = (const ip *)(pkt_data + sizeof(ether_header));
+    const ip *iph = reinterpret_cast<const ip *>(pkt_data + sizeof(ether_header));
     const tcphdr *th = nullptr;
 
     // Ignore packets that aren't IPv4
@@ -810,7 +813,7 @@ bool payloadOffset(const unsigned char *pkt_data, unsigned int *offset,
 
     switch (iph->ip_p) {
     case IPPROTO_TCP:
-        th = (const tcphdr *)((const char *)iph + ihlen);
+        th = reinterpret_cast<const tcphdr *>(reinterpret_cast<const char *>(iph) + ihlen);
         thlen = th->th_off * 4;
         break;
     case IPPROTO_UDP:
@@ -847,7 +850,7 @@ static unsigned parseFlags(const string &flagsStr) {
         case '\r': // stray carriage-return
             break;
         default:
-            cerr << "Unsupported flag \'" << c << "\'" << endl;
+            cerr << "Unsupported flag \'" << c << "\'\n";
             exit(-1);
         }
     }
@@ -859,7 +862,7 @@ static void parseFile(const char *filename, vector<string> &patterns,
                       vector<string> &originals) {
     ifstream inFile(filename);
     if (!inFile.good()) {
-        cerr << "ERROR: Can't open pattern file \"" << filename << "\"" << endl;
+        cerr << "ERROR: Can't open pattern file \"" << filename << "\"\n";
         exit(-1);
     }
 
@@ -889,7 +892,7 @@ static void parseFile(const char *filename, vector<string> &patterns,
 
         size_t flagsStart = expr.find_last_of('/');
         if (flagsStart == string::npos) {
-            cerr << "ERROR: no trailing '/' char" << endl;
+            cerr << "ERROR: no trailing '/' char\n";
             exit(-1);
         }
 

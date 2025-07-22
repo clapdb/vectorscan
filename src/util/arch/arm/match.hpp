@@ -1,6 +1,7 @@
 /*
  * Copyright (c) 2015-2017, Intel Corporation
  * Copyright (c) 2020-2021, VectorCamp PC
+ * Copyright (c) 2023, Arm Limited
  *
  * Redistribution and use in source and binary forms, with or without
  * modification, are permitted provided that the following conditions are met:
@@ -99,3 +100,46 @@ const u8 *last_zero_match_inverted<16>(const u8 *buf, SuperVector<16> mask, u16 
     }
 }
 
+#ifdef HAVE_SVE
+
+// Return the index of the first lane with an active predicate.
+// Assumes pred is not svpfalse()
+static really_inline
+uint64_t index_first_predicate(const svbool_t pred) {
+
+    const svuint8_t indices = svindex_u8(0, 1);
+    const svbool_t single_lane_mask = svpnext_b8(pred, svpfalse());
+    const uint64_t lane_index = svlastb(single_lane_mask, indices);
+
+    return lane_index;
+}
+
+/*
+ * It is assumed mask have the value 0 for all inactive lanes, if any.
+ */
+static really_inline
+uint64_t last_non_zero(const size_t vector_size_int_8, svuint8_t mask) {
+    const svbool_t non_zero = svcmpne(svptrue_b8(), mask, 0);
+
+    if (svptest_any(svptrue_b8(), non_zero)) {
+        return vector_size_int_8 - 1 - index_first_predicate(svrev_b8(non_zero));
+    } else {
+        return vector_size_int_8;
+    }
+}
+
+/*
+ * It is assumed mask have the value 0 for all inactive lanes, if any.
+ */
+static really_inline
+uint64_t first_non_zero(const size_t vector_size_int_8, svuint8_t mask) {
+    const svbool_t non_zero = svcmpne(svptrue_b8(), mask, 0);
+
+    if (svptest_any(svptrue_b8(), non_zero)) {
+        return index_first_predicate(non_zero);
+    } else {
+        return vector_size_int_8;
+    }
+}
+
+#endif //HAVE_SVE

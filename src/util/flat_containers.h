@@ -62,6 +62,7 @@ private:
 
 public:
     template <class OtherIter, class OtherValue>
+    // cppcheck-suppress noExplicitConstructor
     iter_wrapper(iter_wrapper<OtherIter, OtherValue> other,
                  typename std::enable_if<std::is_convertible<
                      OtherIter, WrappedIter>::value>::type * = nullptr)
@@ -130,7 +131,7 @@ public:
         data().clear();
     }
 
-    void swap(flat_base &a) {
+    void swap(flat_base &a) noexcept {
         using std::swap;
         swap(comp(), a.comp());
         swap(data(), a.data());
@@ -195,10 +196,10 @@ public:
 
     // Constructors.
 
-    flat_set(const Compare &compare = Compare(),
+    explicit flat_set(const Compare &compare = Compare(),
              const Allocator &alloc = Allocator())
         : base_type(compare, alloc) {}
-
+    
     template <class InputIt>
     flat_set(InputIt first, InputIt last, const Compare &compare = Compare(),
              const Allocator &alloc = Allocator())
@@ -214,9 +215,9 @@ public:
     }
 
     flat_set(const flat_set &) = default;
-    flat_set(flat_set &&) = default;
+    flat_set(flat_set &&) noexcept = default;
     flat_set &operator=(const flat_set &) = default;
-    flat_set &operator=(flat_set &&) = default;
+    flat_set &operator=(flat_set &&) noexcept = default;
 
     // Iterators.
 
@@ -352,7 +353,7 @@ public:
     }
 
     // Free swap function for ADL.
-    friend void swap(flat_set &a, flat_set &b) {
+    friend void swap(flat_set &a, flat_set &b) noexcept {
         a.swap(b);
     }
 };
@@ -425,7 +426,7 @@ public:
 
     // Constructors.
 
-    flat_map(const Compare &compare = Compare(),
+    explicit flat_map(const Compare &compare = Compare(),
              const Allocator &alloc = Allocator())
         : base_type(compare, alloc) {}
 
@@ -444,9 +445,9 @@ public:
     }
 
     flat_map(const flat_map &) = default;
-    flat_map(flat_map &&) = default;
+    flat_map(flat_map &&) noexcept = default;
     flat_map &operator=(const flat_map &) = default;
-    flat_map &operator=(flat_map &&) = default;
+    flat_map &operator=(flat_map &&) noexcept = default;
 
     // Iterators.
 
@@ -615,7 +616,7 @@ public:
         friend class flat_map;
     protected:
         Compare c;
-        value_compare(Compare c_in) : c(c_in) {}
+        explicit value_compare(Compare c_in) : c(c_in) {}
     public:
         bool operator()(const value_type &lhs, const value_type &rhs) {
             return c(lhs.first, rhs.first);
@@ -636,7 +637,7 @@ public:
     }
 
     // Free swap function for ADL.
-    friend void swap(flat_map &a, flat_map &b) {
+    friend void swap(flat_map &a, flat_map &b) noexcept {
         a.swap(b);
     }
 };

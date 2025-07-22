@@ -66,7 +66,7 @@ public:
         }
     }
 
-    bytecode_ptr(std::nullptr_t) {}
+    explicit bytecode_ptr(std::nullptr_t) {}
 
     T *get() const { return ptr.get(); }
 
@@ -95,7 +95,7 @@ public:
         return p;
     }
 
-    void swap(bytecode_ptr &other) {
+    void swap(bytecode_ptr &other) noexcept {
         using std::swap;
         swap(ptr, other.ptr);
         swap(bytes, other.bytes);

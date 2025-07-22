@@ -47,8 +47,8 @@ class NGHolder;
 } // namespace ue2
 
 struct CorpusGenerationFailure {
-    explicit CorpusGenerationFailure(const std::string s) :
-        message(std::move(s)) {}
+    explicit CorpusGenerationFailure(const std::string& s) :
+        message(s) {}
     std::string message;
 };
 

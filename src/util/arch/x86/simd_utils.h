@@ -42,6 +42,7 @@
 
 #include <string.h> // for memcpy
 
+
 #define ZEROES_8 0, 0, 0, 0, 0, 0, 0, 0
 #define ZEROES_31 ZEROES_8, ZEROES_8, ZEROES_8, 0, 0, 0, 0, 0, 0, 0
 #define ZEROES_32 ZEROES_8, ZEROES_8, ZEROES_8, ZEROES_8
@@ -113,9 +114,20 @@ static really_inline u32 diffrich64_128(m128 a, m128 b) {
 }
 
 static really_really_inline
+m128 add_2x64(m128 a, m128 b) {
+    return (m128) _mm_add_epi64(a, b);
+}
+
+static really_really_inline
+m128 sub_2x64(m128 a, m128 b) {
+    return (m128) _mm_sub_epi64(a, b);
+}
+
+static really_really_inline
 m128 lshift64_m128(m128 a, unsigned b) {
 #if defined(HAVE__BUILTIN_CONSTANT_P)
     if (__builtin_constant_p(b)) {
+        // cppcheck-suppress unsignedLessThanZero
         return _mm_slli_epi64(a, b);
     }
 #endif
@@ -124,8 +136,9 @@ m128 lshift64_m128(m128 a, unsigned b) {
 }
 
 #define rshift64_m128(a, b) _mm_srli_epi64((a), (b))
-#define eq128(a, b)      _mm_cmpeq_epi8((a), (b))
-#define movemask128(a)  ((u32)_mm_movemask_epi8((a)))
+#define eq128(a, b)         _mm_cmpeq_epi8((a), (b))
+#define eq64_m128(a, b)     _mm_cmpeq_epi64((a), (b))
+#define movemask128(a)      ((u32)_mm_movemask_epi8((a)))
 
 #if defined(HAVE_AVX512)
 static really_inline m128 cast512to128(const m512 in) {
@@ -167,13 +180,11 @@ m128 load_m128_from_u64a(const u64a *p) {
 
 #define CASE_RSHIFT_VECTOR(a, count)  case count: return _mm_srli_si128((m128)(a), (count)); break;
 
+// we encounter cases where an argument slips past __builtin_constant_p but 
+// still fails to meet the (stricter) criteria demanded by the underlying 
+// intrinsic. in those cases we want to explicitly avoid the optimization.
 static really_inline
-m128 rshiftbyte_m128(const m128 a, int count_immed) {
-#if defined(HAVE__BUILTIN_CONSTANT_P)
-    if (__builtin_constant_p(count_immed)) {
-        return _mm_srli_si128(a, count_immed);
-    }
-#endif
+m128 rshiftbyte_m128_nim(const m128 a, int count_immed) {
     switch (count_immed) {
     case 0: return a; break;
     CASE_RSHIFT_VECTOR(a, 1);
@@ -194,17 +205,26 @@ m128 rshiftbyte_m128(const m128 a, int count_immed) {
     default: return zeroes128(); break;
     }
 }
+
+static really_inline
+m128 rshiftbyte_m128(const m128 a, int count_immed) {
+#if defined(HAVE__BUILTIN_CONSTANT_P) && !defined(VS_SIMDE_BACKEND)
+    if (__builtin_constant_p(count_immed)) {
+        return _mm_srli_si128(a, count_immed);
+    }
+#endif
+    return rshiftbyte_m128_nim(a, count_immed);
+}
+
 #undef CASE_RSHIFT_VECTOR
 
 #define CASE_LSHIFT_VECTOR(a, count)  case count: return _mm_slli_si128((m128)(a), (count)); break;
 
+// we encounter cases where an argument slips past __builtin_constant_p but 
+// still fails to meet the (stricter) criteria demanded by the underlying 
+// intrinsic. in those cases we want to explicitly avoid the optimization.
 static really_inline
-m128 lshiftbyte_m128(const m128 a, int count_immed) {
-#if defined(HAVE__BUILTIN_CONSTANT_P)
-    if (__builtin_constant_p(count_immed)) {
-        return _mm_slli_si128(a, count_immed);
-    }
-#endif
+m128 lshiftbyte_m128_nim(const m128 a, int count_immed) {
     switch (count_immed) {
     case 0: return a; break;
     CASE_LSHIFT_VECTOR(a, 1);
@@ -224,6 +244,16 @@ m128 lshiftbyte_m128(const m128 a, int count_immed) {
     CASE_LSHIFT_VECTOR(a, 15);
     default: return zeroes128(); break;
     }
+}
+
+static really_inline
+m128 lshiftbyte_m128(const m128 a, int count_immed) {
+#if defined(HAVE__BUILTIN_CONSTANT_P) && !defined(VS_SIMDE_BACKEND)
+    if (__builtin_constant_p(count_immed)) {
+        return _mm_slli_si128(a, count_immed);
+    }
+#endif
+    return lshiftbyte_m128_nim(a, count_immed);
 }
 #undef CASE_LSHIFT_VECTOR
 
@@ -279,6 +309,7 @@ static really_inline m128 andnot128(m128 a, m128 b) {
 static really_inline m128 load128(const void *ptr) {
     assert(ISALIGNED_N(ptr, alignof(m128)));
     ptr = vectorscan_assume_aligned(ptr, 16);
+    // cppcheck-suppress cstyleCast
     return _mm_load_si128((const m128 *)ptr);
 }
 
@@ -286,16 +317,19 @@ static really_inline m128 load128(const void *ptr) {
 static really_inline void store128(void *ptr, m128 a) {
     assert(ISALIGNED_N(ptr, alignof(m128)));
     ptr = vectorscan_assume_aligned(ptr, 16);
+    // cppcheck-suppress cstyleCast
     *(m128 *)ptr = a;
 }
 
 // unaligned load
 static really_inline m128 loadu128(const void *ptr) {
+    // cppcheck-suppress cstyleCast
     return _mm_loadu_si128((const m128 *)ptr);
 }
 
 // unaligned store
 static really_inline void storeu128(void *ptr, m128 a) {
+    // cppcheck-suppress cstyleCast
     _mm_storeu_si128 ((m128 *)ptr, a);
 }
 
@@ -485,6 +519,56 @@ static really_inline m256 ones256(void) {
     return rv;
 }
 
+// byte-granularity shifts of the whole 256 bits as a single chunk
+static really_inline m256 lshift_byte_m256(m256 v, u8 n){
+    if(n==0)return v;
+    else {
+        union {
+            u8 c[32];
+            m128 val128[2];
+            m256 val256;
+        } u;
+        u.val256=v;
+        if(n < 16){
+            m128 c = lshiftbyte_m128_nim(u.val128[1], 16-n);
+            u.val128[1] = rshiftbyte_m128_nim(u.val128[1], n);
+            u.val128[0] = or128(c, rshiftbyte_m128_nim(u.val128[0], n));
+            return u.val256;
+        } else if(n==16){
+            u.val128[0] = u.val128[1]; u.val128[1]=zeroes128();
+            return u.val256;
+        } else if(n<32){
+            u.val128[0] = rshiftbyte_m128_nim(u.val128[0], n-16);
+            u.val128[1]=zeroes128();
+            return u.val256;
+        } else return zeroes256();
+    }
+}
+
+static really_inline m256 rshift_byte_m256(m256 v, u8 n){
+    if(n==0)return v;
+    else {
+        union {
+            m128 val128[2];
+            m256 val256;
+        } u;
+        u.val256=v;
+        if(n < 16){
+            m128 c = rshiftbyte_m128_nim(u.val128[0], 16-n);
+            u.val128[0] = lshiftbyte_m128_nim(u.val128[0], n);
+            u.val128[1] = or128(c, lshiftbyte_m128_nim(u.val128[1], n));
+            return u.val256;
+        } else if(n==16){
+            u.val128[1] = u.val128[0]; u.val128[0]=zeroes128();
+            return u.val256;
+        } else if(n<32){
+            u.val128[1] = lshiftbyte_m128_nim(u.val128[1], n-16);
+            u.val128[0]=zeroes128();
+            return u.val256;
+        } else return zeroes256();
+    }
+}
+
 static really_inline m256 add256(m256 a, m256 b) {
     return _mm256_add_epi64(a, b);
 }
@@ -667,24 +751,6 @@ m256 combine2x128(m128 hi, m128 lo) {
 #endif
 }
 #endif //AVX2
-
-#if defined(HAVE_SIMD_128_BITS)
-/**
- * "Rich" version of diff384(). Takes two vectors a and b and returns a 12-bit
- * mask indicating which 32-bit words contain differences.
- */
-
-static really_inline u32 diffrich384(m384 a, m384 b) {
-    m128 z = zeroes128();
-    a.lo = _mm_cmpeq_epi32(a.lo, b.lo);
-    a.mid = _mm_cmpeq_epi32(a.mid, b.mid);
-    a.hi = _mm_cmpeq_epi32(a.hi, b.hi);
-    m128 packed = _mm_packs_epi16(_mm_packs_epi32(a.lo, a.mid),
-                                  _mm_packs_epi32(a.hi, z));
-    return ~(_mm_movemask_epi8(packed)) & 0xfff;
-}
-
-#endif // HAVE_SIMD_128_BITS
 
 /****
  **** 512-bit Primitives

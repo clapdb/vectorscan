@@ -100,8 +100,8 @@ RoseProgram::RoseProgram() {
 
 RoseProgram::~RoseProgram() = default;
 
-RoseProgram::RoseProgram(RoseProgram &&) = default;
-RoseProgram &RoseProgram::operator=(RoseProgram &&) = default;
+RoseProgram::RoseProgram(RoseProgram &&) noexcept = default;
+RoseProgram &RoseProgram::operator=(RoseProgram &&) noexcept = default;
 
 bool RoseProgram::empty() const {
     assert(!prog.empty());
@@ -292,6 +292,7 @@ void stripCheckHandledInstruction(RoseProgram &prog) {
 /** Returns true if the program may read the interpreter's work_done flag */
 static
 bool reads_work_done_flag(const RoseProgram &prog) {
+    // cppcheck-suppress useStlAlgorithm
     for (const auto &ri : prog) {
         if (dynamic_cast<const RoseInstrSquashGroups *>(ri.get())) {
             return true;
@@ -762,7 +763,7 @@ void makeRoleSetState(const unordered_map<RoseVertex, u32> &roleStateIndices,
 
 static
 void makePushDelayedInstructions(const RoseLiteralMap &literals,
-                                 ProgramBuild &prog_build,
+                                 ProgramBuild const &prog_build,
                                  const flat_set<u32> &delayed_ids,
                                  RoseProgram &program) {
     vector<RoseInstrPushDelayed> delay_instructions;
@@ -902,7 +903,7 @@ void makeRoleCheckBounds(const RoseBuildImpl &build, RoseVertex v,
 }
 
 static
-void makeRoleGroups(const RoseGraph &g, ProgramBuild &prog_build,
+void makeRoleGroups(const RoseGraph &g, ProgramBuild const &prog_build,
                     RoseVertex v, RoseProgram &program) {
     rose_group groups = g[v].groups;
     if (!groups) {
@@ -914,6 +915,7 @@ void makeRoleGroups(const RoseGraph &g, ProgramBuild &prog_build,
     assert(in_degree(v, g) > 0);
     rose_group already_on = ~rose_group{0};
     for (const auto &u : inv_adjacent_vertices_range(v, g)) {
+        // cppcheck-suppress useStlAlgorithm
         already_on &= prog_build.vertex_group_map.at(u);
     }
 
@@ -1018,7 +1020,7 @@ bool makeRoleMask(const vector<LookEntry> &look, RoseProgram &program) {
 }
 
 static UNUSED
-string convertMaskstoString(u8 *p, int byte_len) {
+string convertMaskstoString(u8 const *p, int byte_len) {
     string s;
     for (int i = 0; i < byte_len; i++) {
         u8 hi = *p >> 4;
@@ -1161,7 +1163,7 @@ static really_inline
 void nibUpdate(map<u32, u16> &nib, u32 hi_lo) {
     u16 hi = hi_lo >> 16;
     u16 lo = hi_lo & 0xffff;
-    for (const auto pairs : nib) {
+    for (const auto &pairs : nib) {
         u32 old = pairs.first;
         if ((old >> 16) == hi || (old & 0xffff) == lo) {
             if (!nib[old | hi_lo]) {
@@ -1623,7 +1625,7 @@ bool hasDelayedLiteral(const RoseBuildImpl &build,
 
 static
 RoseProgram makeLitInitialProgram(const RoseBuildImpl &build,
-                                  ProgramBuild &prog_build, u32 lit_id,
+                                  ProgramBuild const &prog_build, u32 lit_id,
                                   const vector<RoseEdge> &lit_edges,
                                   bool is_anchored_replay_program) {
     RoseProgram program;
@@ -1918,8 +1920,8 @@ void makeRoleSuffix(const RoseBuildImpl &build,
     if (!g[v].suffix) {
         return;
     }
-    assert(contains(suffixes, g[v].suffix));
-    u32 queue = suffixes.at(g[v].suffix);
+    assert(contains(suffixes, suffix_id(g[v].suffix)));
+    u32 queue = suffixes.at(suffix_id(g[v].suffix));
     u32 event;
     assert(contains(engine_info_by_queue, queue));
     const auto eng_info = engine_info_by_queue.at(queue);
@@ -1991,7 +1993,7 @@ void makeRoleInfixTriggers(const RoseBuildImpl &build,
                                       make_pair(g[v].index, g[e].rose_top));
             assert(top < MQE_INVALID);
         } else if (!isMultiTopType(eng_info.type)) {
-            assert(num_tops(g[v].left) == 1);
+            assert(num_tops(left_id(g[v].left)) == 1);
             top = MQE_TOP;
         } else {
             top = MQE_TOP_FIRST + g[e].rose_top;
@@ -2020,6 +2022,7 @@ bool onlyAtEod(const RoseBuildImpl &tbi, RoseVertex v) {
         return false;
     }
 
+    // cppcheck-suppress useStlAlgorithm
     for (const auto &e : out_edges_range(v, g)) {
         RoseVertex w = target(e, g);
         if (!g[w].eod_accept) {
@@ -2178,7 +2181,7 @@ void makeGroupSquashInstruction(const RoseBuildImpl &build, u32 lit_id,
 
 namespace {
 struct ProgKey {
-    ProgKey(const RoseProgram &p) : prog(&p) {}
+    explicit ProgKey(const RoseProgram &p) : prog(&p) {}
 
     bool operator==(const ProgKey &b) const {
         return RoseProgramEquivalence()(*prog, *b.prog);
@@ -2200,7 +2203,7 @@ RoseProgram assembleProgramBlocks(vector<RoseProgram> &&blocks_in) {
 
     ue2_unordered_set<ProgKey> seen;
     for (auto &block : blocks_in) {
-        if (contains(seen, block)) {
+        if (contains(seen, ProgKey(block))) {
             continue;
         }
 
@@ -2306,7 +2309,7 @@ RoseProgram makeLiteralProgram(const RoseBuildImpl &build,
 }
 
 RoseProgram makeDelayRebuildProgram(const RoseBuildImpl &build,
-                                    ProgramBuild &prog_build,
+                                    ProgramBuild const &prog_build,
                                     const vector<u32> &lit_ids) {
     assert(!lit_ids.empty());
     assert(build.cc.streaming);
@@ -2432,9 +2435,8 @@ void addPredBlocksAny(map<u32, RoseProgram> &pred_blocks, u32 num_states,
     RoseProgram sparse_program;
 
     vector<u32> keys;
-    for (const u32 &key : pred_blocks | map_keys) {
-        keys.emplace_back(key);
-    }
+    const auto &k = pred_blocks | map_keys;
+    std::copy(begin(k), end(k),  std::back_inserter(keys));
 
     const RoseInstruction *end_inst = sparse_program.end_instruction();
     auto ri = std::make_unique<RoseInstrSparseIterAny>(num_states, keys, end_inst);

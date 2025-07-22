@@ -91,19 +91,19 @@ struct pattern {
     }
 
     pattern(std::string expression_in, unsigned int flags_in,
-            unsigned int id_in, hs_expr_ext ext_in)
+            unsigned int id_in,const hs_expr_ext& ext_in)
         : expression(std::move(expression_in)), flags(flags_in), id(id_in),
-          ext(std::move(ext_in)) {}
+          ext(ext_in) {}
 };
 
 std::ostream &operator<<(std::ostream &o, const pattern &p);
 
 hs_database_t *buildDB(const std::vector<pattern> &patterns, unsigned int mode,
-                       hs_platform_info *plat = nullptr);
+                       const hs_platform_info *plat = nullptr);
 hs_database_t *buildDB(const pattern &pat, unsigned int mode);
 hs_database_t *buildDB(const char *expression, unsigned int flags,
                        unsigned int id, unsigned int mode,
-                       hs_platform_info *plat = nullptr);
+                       const hs_platform_info *plat = nullptr);
 hs_database_t *buildDB(const char *filename, unsigned int mode,
                        unsigned int extra_flags = 0);
 hs_database_t *buildDB(const char *filename, unsigned int mode,

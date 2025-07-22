@@ -4,7 +4,7 @@ project (vectorscan C CXX)
 
 set (HS_MAJOR_VERSION 5)
 set (HS_MINOR_VERSION 4)
-set (HS_PATCH_VERSION 11)
+set (HS_PATCH_VERSION 12)
 set (HS_VERSION ${HS_MAJOR_VERSION}.${HS_MINOR_VERSION}.${HS_PATCH_VERSION})
 
 string (TIMESTAMP BUILD_DATE "%Y-%m-%d")
@@ -23,17 +23,23 @@ INCLUDE (CheckLibraryExists)
 INCLUDE (CheckSymbolExists)
 include (CMakeDependentOption)
 include (GNUInstallDirs)
-include (${CMAKE_MODULE_PATH}/platform.cmake)
 include (${CMAKE_MODULE_PATH}/boost.cmake)
 include (${CMAKE_MODULE_PATH}/ragel.cmake)
 
-find_package(PkgConfig REQUIRED)
+find_package(PkgConfig QUIET)
 
 find_program(RAGEL ragel)
 
 if(${RAGEL} STREQUAL "RAGEL-NOTFOUND")
     message(FATAL_ERROR "Ragel state machine compiler not found")
 endif()
+
+# Add ccache to speed builds
+find_program(CCACHE_FOUND ccache)
+if(CCACHE_FOUND)
+    set_property(GLOBAL PROPERTY RULE_LAUNCH_COMPILE ccache)
+    set_property(GLOBAL PROPERTY RULE_LAUNCH_LINK ccache)
+endif(CCACHE_FOUND)
 
 # Build type check
 
@@ -116,18 +122,33 @@ if (RELEASE_BUILD)
     add_definitions(-DNDEBUG)
 endif()
 
+# Architecture detection
+
+include (${CMAKE_MODULE_PATH}/platform.cmake)
+
 # Detect OS and if Fat Runtime is available
 include (${CMAKE_MODULE_PATH}/osdetection.cmake)
 
-if (ARCH_IA32 OR ARCH_X86_64)
+if(ARCH_X86_64 AND BUILD_SSE2_SIMDE AND NOT FAT_RUNTIME)
+    set(SIMDE_BACKEND True)
+endif()
+
+if(SIMDE_BACKEND)
+    include (${CMAKE_MODULE_PATH}/simde.cmake)
+elseif (ARCH_IA32 OR ARCH_X86_64)
     include (${CMAKE_MODULE_PATH}/cflags-x86.cmake)
-    set(ARCH_FLAG march)
 elseif (ARCH_ARM32 OR ARCH_AARCH64)
     include (${CMAKE_MODULE_PATH}/cflags-arm.cmake)
-    set(ARCH_FLAG march)
 elseif (ARCH_PPC64EL)
     include (${CMAKE_MODULE_PATH}/cflags-ppc64le.cmake)
+else ()
+    message(FATAL_ERROR "Unsupported platform")
+endif ()
+
+if (ARCH_PPC64EL)
     set(ARCH_FLAG mcpu)
+else ()
+    set(ARCH_FLAG march)
 endif ()
 
 # Detect Native arch flags if requested
@@ -139,9 +160,11 @@ include (${CMAKE_MODULE_PATH}/sanitize.cmake)
 
 if (NOT FAT_RUNTIME)
     if (GNUCC_TUNE)
+        message(STATUS "GNUCC_TUNE is set")
         set(ARCH_C_FLAGS "-${ARCH_FLAG}=${GNUCC_ARCH} -${TUNE_FLAG}=${GNUCC_TUNE}")
         set(ARCH_CXX_FLAGS "-${ARCH_FLAG}=${GNUCC_ARCH} -${TUNE_FLAG}=${GNUCC_TUNE}")
     else()
+        message(STATUS "GNUCC_TUNE is not set")
         set(ARCH_C_FLAGS "-${ARCH_FLAG}=${GNUCC_ARCH} -mtune=${TUNE_FLAG} ${ARCH_C_FLAGS}")
         set(ARCH_CXX_FLAGS "-${ARCH_FLAG}=${GNUCC_ARCH} -mtune=${TUNE_FLAG} ${ARCH_CXX_FLAGS}")
     endif()
@@ -207,6 +230,19 @@ set_source_files_properties(
 
 ragelmaker(src/parser/control_verbs.rl)
 
+# BSD has the _np funcs in a _np header
+CHECK_INCLUDE_FILE_CXX(pthread_np.h HAVE_PTHREAD_NP_H)
+if (HAVE_PTHREAD_NP_H)
+    set (PTHREAD_NP_INC pthread_np.h)
+else ()
+    set (PTHREAD_NP_INC pthread.h)
+endif ()
+CHECK_CXX_SYMBOL_EXISTS(pthread_setaffinity_np ${PTHREAD_NP_INC} HAVE_DECL_PTHREAD_SETAFFINITY_NP)
+
+CHECK_FUNCTION_EXISTS(malloc_info HAVE_MALLOC_INFO)
+CHECK_FUNCTION_EXISTS(shmget HAVE_SHMGET)
+set(HAVE_SHMGET ${HAVE_SHMGET} CACHE BOOL "shmget()")
+
 # do substitutions
 configure_file(${CMAKE_MODULE_PATH}/config.h.in ${PROJECT_BINARY_DIR}/config.h)
 configure_file(src/hs_version.h.in ${PROJECT_BINARY_DIR}/hs_version.h)
@@ -239,8 +275,11 @@ set (hs_exec_common_SRCS
     src/util/arch/common/cpuid_flags.h
     src/util/multibit.c
     )
-
-if (ARCH_IA32 OR ARCH_X86_64)
+if (SIMDE_BACKEND)
+set (hs_exec_common_SRCS
+    ${hs_exec_common_SRCS}
+    src/util/arch/simde/cpuid_flags.c)
+elseif (ARCH_IA32 OR ARCH_X86_64)
 set (hs_exec_common_SRCS
     ${hs_exec_common_SRCS}
     src/util/arch/x86/cpuid_flags.c
@@ -275,7 +314,7 @@ set (hs_exec_SRCS
     src/fdr/fdr_confirm_runtime.h
     src/fdr/flood_runtime.h
     src/fdr/fdr_loadval.h
-    src/fdr/teddy.c
+    src/fdr/teddy.cpp
     src/fdr/teddy.h
     src/fdr/teddy_internal.h
     src/fdr/teddy_runtime_common.h
@@ -398,7 +437,12 @@ set (hs_exec_SRCS
     src/database.h
 )
 
-if (ARCH_IA32 OR ARCH_X86_64)
+if (SIMDE_BACKEND)
+set (hs_exec_SRCS
+    ${hs_exec_SRCS}
+    src/nfa/vermicelli_simd.cpp
+    src/util/supervector/arch/x86/impl.cpp)
+elseif (ARCH_IA32 OR ARCH_X86_64)
 set (hs_exec_SRCS
     ${hs_exec_SRCS}
     src/nfa/vermicelli_simd.cpp
@@ -414,9 +458,11 @@ set (hs_exec_SRCS
     src/util/supervector/arch/ppc64el/impl.cpp)
 endif()
 
+
 if (ARCH_IA32 OR ARCH_X86_64)
     set (hs_exec_avx2_SRCS
-        src/fdr/teddy_avx2.c
+        src/fdr/teddy.cpp
+        src/fdr/teddy_fat.cpp
         src/util/arch/x86/masked_move.c
         src/util/arch/x86/masked_move.h
     )
@@ -918,16 +964,47 @@ else ()
         if (NOT BUILD_AVX512VBMI)
             set (DISPATCHER_DEFINE "${DISPATCHER_DEFINE} -DDISABLE_AVX512VBMI_DISPATCH")
         endif (NOT BUILD_AVX512VBMI)
+        if(BUILD_SSE2_SIMDE)
+            set (DISPATCHER_DEFINE "${DISPATCHER_DEFINE} -DVS_SIMDE_BACKEND -DVS_SIMDE_NATIVE -march=core2 -msse2")
+        endif(BUILD_SSE2_SIMDE)
         set_source_files_properties(src/dispatcher.c PROPERTIES
             COMPILE_FLAGS "-Wno-unused-parameter -Wno-unused-function ${DISPATCHER_DEFINE}")
+        if(BUILD_SSE2_SIMDE AND NOT BUILD_AVX2 AND NOT BUILD_AVX512 AND NOT BUILD_AVX512VBMI)
+            set_source_files_properties(src/crc32.c PROPERTIES
+                COMPILE_FLAGS "-DVS_SIMDE_BACKEND -DVS_SIMDE_NATIVE -march=core2 -msse2")
+            set_source_files_properties(src/hs.cpp PROPERTIES
+                COMPILE_FLAGS "-DVS_SIMDE_BACKEND -DVS_SIMDE_NATIVE -march=core2 -msse2")
+
+            string(REGEX REPLACE "-msse4.2" "-DVS_SIMDE_BACKEND -DVS_SIMDE_NATIVE -march=core2 -msse2" CMAKE_C_FLAGS "${CMAKE_C_FLAGS}")
+            string(REGEX REPLACE "-msse4.2" "-DVS_SIMDE_BACKEND -DVS_SIMDE_NATIVE -march=core2 -msse2" CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS}")
+        endif()
 
         if (BUILD_STATIC_LIBS)
-            add_library(hs_exec_core2 OBJECT ${hs_exec_SRCS})
-            list(APPEND RUNTIME_LIBS $<TARGET_OBJECTS:hs_exec_core2>)
-            set_target_properties(hs_exec_core2 PROPERTIES
-                COMPILE_FLAGS "-march=core2 -msse4.2"
-                RULE_LAUNCH_COMPILE "${BUILD_WRAPPER} core2 ${CMAKE_MODULE_PATH}/keep.syms.in"
-                )
+
+            if (BUILD_SSE2_SIMDE)
+              add_library(hs_exec_core2 OBJECT ${hs_exec_SRCS})
+              list(APPEND RUNTIME_LIBS $<TARGET_OBJECTS:hs_exec_core2>)
+              message("Building SIMDE SSE2 version..")
+              include_directories(${PROJECT_SOURCE_DIR}/simde)
+              if (CMAKE_COMPILER_IS_CLANG)
+                set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -DSIMDE_NO_CHECK_IMMEDIATE_CONSTANT")
+                set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -DSIMDE_NO_CHECK_IMMEDIATE_CONSTANT")
+              endif()
+
+              set_target_properties(hs_exec_core2 PROPERTIES
+                  string(REGEX REPLACE "-msse4.2" "-msse2" CMAKE_C_FLAGS "${CMAKE_C_FLAGS}")
+                  string(REGEX REPLACE "-msse4.2" "-msse2" CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS}")
+                  COMPILE_FLAGS "-DVS_SIMDE_BACKEND -DVS_SIMDE_NATIVE -march=core2 -msse2"
+                  RULE_LAUNCH_COMPILE "${BUILD_WRAPPER} core2 ${CMAKE_MODULE_PATH}/keep.syms.in"
+                  )
+            else()
+              add_library(hs_exec_core2 OBJECT ${hs_exec_SRCS})
+              list(APPEND RUNTIME_LIBS $<TARGET_OBJECTS:hs_exec_core2>)
+              set_target_properties(hs_exec_core2 PROPERTIES
+                  COMPILE_FLAGS "-march=core2 -msse4.2"
+                  RULE_LAUNCH_COMPILE "${BUILD_WRAPPER} core2 ${CMAKE_MODULE_PATH}/keep.syms.in"
+                  )
+	    endif(BUILD_SSE2_SIMDE)
 
             add_library(hs_exec_corei7 OBJECT ${hs_exec_SRCS})
             list(APPEND RUNTIME_LIBS $<TARGET_OBJECTS:hs_exec_corei7>)
@@ -980,19 +1057,59 @@ else ()
                 $<TARGET_OBJECTS:hs_compile>
                 $<TARGET_OBJECTS:hs_exec_common>
                 ${RUNTIME_LIBS})
+
+            if (BUILD_SSE2_SIMDE)
+                set_target_properties(hs_compile PROPERTIES
+                  string(REGEX REPLACE "-msse4.2" "-msse2" CMAKE_C_FLAGS "${CMAKE_C_FLAGS}")
+                  string(REGEX REPLACE "-msse4.2" "-msse2" CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS}")
+                  COMPILE_FLAGS "-DVS_SIMDE_BACKEND -DVS_SIMDE_NATIVE -march=core2 -msse2"
+                )
+                set_target_properties(hs PROPERTIES
+                  string(REGEX REPLACE "-msse4.2" "-msse2" CMAKE_C_FLAGS "${CMAKE_C_FLAGS}")
+                  string(REGEX REPLACE "-msse4.2" "-msse2" CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS}")
+                  COMPILE_FLAGS "-DVS_SIMDE_BACKEND -DVS_SIMDE_NATIVE -march=core2 -msse2"
+                )
+            endif (BUILD_SSE2_SIMDE)
+
         endif (BUILD_STATIC_LIBS)
 
         if (BUILD_SHARED_LIBS)
             # build shared libs
             add_library(hs_compile_shared OBJECT ${hs_compile_SRCS})
             set_target_properties(hs_compile_shared PROPERTIES POSITION_INDEPENDENT_CODE TRUE)
-            add_library(hs_exec_shared_core2 OBJECT ${hs_exec_SRCS})
-            list(APPEND RUNTIME_SHLIBS $<TARGET_OBJECTS:hs_exec_shared_core2>)
-            set_target_properties(hs_exec_shared_core2 PROPERTIES
-                COMPILE_FLAGS "-march=core2 -msse4.2"
-                POSITION_INDEPENDENT_CODE TRUE
-                RULE_LAUNCH_COMPILE "${BUILD_WRAPPER} core2 ${CMAKE_MODULE_PATH}/keep.syms.in"
-                )
+
+            if (BUILD_SSE2_SIMDE)
+              message("Building SIMDE SSE2 version..")
+              add_library(hs_exec_shared_core2 OBJECT ${hs_exec_SRCS})
+              list(APPEND RUNTIME_SHLIBS $<TARGET_OBJECTS:hs_exec_shared_core2>)
+
+              include_directories(${PROJECT_SOURCE_DIR}/simde)
+              if (CMAKE_COMPILER_IS_CLANG)
+                set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -DSIMDE_NO_CHECK_IMMEDIATE_CONSTANT")
+                set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -DSIMDE_NO_CHECK_IMMEDIATE_CONSTANT")
+              endif()
+              set_target_properties(hs_exec_shared_core2 PROPERTIES
+                  string(REGEX REPLACE "-msse4.2" "-msse2" CMAKE_C_FLAGS "${CMAKE_C_FLAGS}")
+                  string(REGEX REPLACE "-msse4.2" "-msse2" CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS}")
+                  COMPILE_FLAGS "-DVS_SIMDE_BACKEND -DVS_SIMDE_NATIVE -march=core2 -msse2"
+                  POSITION_INDEPENDENT_CODE TRUE
+                  RULE_LAUNCH_COMPILE "${BUILD_WRAPPER} core2 ${CMAKE_MODULE_PATH}/keep.syms.in"
+                  )
+              set_target_properties(hs_compile_shared PROPERTIES
+                  string(REGEX REPLACE "-msse4.2" "-msse2" CMAKE_C_FLAGS "${CMAKE_C_FLAGS}")
+                  string(REGEX REPLACE "-msse4.2" "-msse2" CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS}")
+                  COMPILE_FLAGS "-DVS_SIMDE_BACKEND -DVS_SIMDE_NATIVE -march=core2 -msse2"
+                  )
+            else()
+              add_library(hs_exec_shared_core2 OBJECT ${hs_exec_SRCS})
+              list(APPEND RUNTIME_SHLIBS $<TARGET_OBJECTS:hs_exec_shared_core2>)
+              set_target_properties(hs_exec_shared_core2 PROPERTIES
+                  COMPILE_FLAGS "-march=core2 -msse4.2"
+                  POSITION_INDEPENDENT_CODE TRUE
+                  RULE_LAUNCH_COMPILE "${BUILD_WRAPPER} core2 ${CMAKE_MODULE_PATH}/keep.syms.in"
+                  )
+            endif (BUILD_SSE2_SIMDE)
+
             add_library(hs_exec_shared_corei7 OBJECT ${hs_exec_SRCS})
             list(APPEND RUNTIME_SHLIBS $<TARGET_OBJECTS:hs_exec_shared_corei7>)
             set_target_properties(hs_exec_shared_corei7 PROPERTIES
@@ -1194,11 +1311,17 @@ if (NOT BUILD_STATIC_LIBS)
 endif ()
 
 add_subdirectory(util)
-add_subdirectory(unit)
 
-if (EXISTS ${CMAKE_SOURCE_DIR}/tools/CMakeLists.txt)
+option(BUILD_UNIT "Build Hyperscan unit tests (default TRUE)" TRUE)
+if(BUILD_UNIT)
+    add_subdirectory(unit)
+endif()
+
+option(BUILD_TOOLS "Build Hyperscan tools (default TRUE)" TRUE)
+if(EXISTS ${CMAKE_SOURCE_DIR}/tools/CMakeLists.txt AND BUILD_TOOLS)
     add_subdirectory(tools)
 endif()
+
 if (EXISTS ${CMAKE_SOURCE_DIR}/chimera/CMakeLists.txt AND BUILD_CHIMERA)
     add_subdirectory(chimera)
 endif()
@@ -1213,4 +1336,7 @@ if(BUILD_BENCHMARKS)
     add_subdirectory(benchmarks)
 endif()
 
-add_subdirectory(doc/dev-reference)
+option(BUILD_DOC "Build the Hyperscan documentation (default TRUE)" TRUE)
+if(BUILD_DOC)
+    add_subdirectory(doc/dev-reference)
+endif()

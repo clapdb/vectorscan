@@ -1,6 +1,6 @@
 /*
  * Copyright (c) 2015-2020, Intel Corporation
- * Copyright (c) 2020-2021, VectorCamp PC
+ * Copyright (c) 2020-2023, VectorCamp PC
  * Copyright (c) 2021, Arm Limited
  *
  * Redistribution and use in source and binary forms, with or without
@@ -71,12 +71,16 @@ const u8 *vermicelliDoubleMaskedBlock(SuperVector<S> const data, SuperVector<S> 
                                       SuperVector<S> const mask1, SuperVector<S> const mask2,
                                       u8 const c1, u8 const c2, u8 const m1, u8 const m2, u8 const *buf, u16 const len);
 
+#if defined(VS_SIMDE_BACKEND)
+#include "x86/vermicelli.hpp"
+#else
 #if defined(ARCH_IA32) || defined(ARCH_X86_64)
 #include "x86/vermicelli.hpp"
 #elif defined(ARCH_ARM32) || defined(ARCH_AARCH64)
 #include "arm/vermicelli.hpp"
 #elif defined(ARCH_PPC64EL)
 #include "ppc64el/vermicelli.hpp"
+#endif
 #endif
 
 template <uint16_t S>
@@ -120,8 +124,8 @@ static const u8 *vermicelliExecReal(SuperVector<S> const chars, SuperVector<S> c
     // finish off tail
 
     if (d != buf_end) {
-        SuperVector<S> data = SuperVector<S>::loadu(buf_end - S);
-        rv = vermicelliBlock(data, chars, casemask, buf_end - S, buf_end - d);
+        SuperVector<S> data = SuperVector<S>::loadu_maskz(d, buf_end - d);
+        rv = vermicelliBlock(data, chars, casemask, d, buf_end - d);
         DEBUG_PRINTF("rv %p \n", rv);
         if (rv && rv < buf_end) return rv;
     }

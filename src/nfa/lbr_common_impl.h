@@ -180,7 +180,7 @@ found_top:;
 
         u64a ep = MIN(MIN(end, (s64a)q->length) + offset, first_match);
         if (ep > sp && sp >= offset) {
-            size_t eloc;
+            size_t eloc = 0;
             DEBUG_PRINTF("rev b%llu e%llu/%zu\n", sp - offset, ep - offset,
                          q->length);
             assert(ep - offset <= q->length);
@@ -279,6 +279,7 @@ char JOIN(ENGINE_EXEC_NAME, _Q_i)(const struct NFA *nfa, struct mq *q,
                 assert(rv == MO_CONTINUE_MATCHING);
             }
 
+            // cppcheck-suppress knownConditionTrueFalse
             if (escape_found) {
                 DEBUG_PRINTF("clearing repeat due to escape\n");
                 clearRepeat(info, lstate);
@@ -355,6 +356,7 @@ void JOIN(ENGINE_EXEC_NAME, _StreamSilent)(const struct NFA *nfa, struct mq *q,
 
     size_t eloc = 0;
     char escaped = FWDSCAN_FN(nfa, buf, 0, length, &eloc);
+    // cppcheck-suppress knownConditionTrueFalse
     if (escaped) {
         assert(eloc < length);
         DEBUG_PRINTF("escape found at %zu, clearing repeat\n", eloc);

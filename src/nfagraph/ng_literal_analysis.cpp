@@ -46,6 +46,7 @@
 
 #include <algorithm>
 #include <fstream>
+#include <numeric>
 #include <queue>
 
 #include <boost/graph/boykov_kolmogorov_max_flow.hpp>
@@ -67,7 +68,7 @@ namespace {
 
 struct LitGraphVertexProps {
     LitGraphVertexProps() = default;
-    explicit LitGraphVertexProps(ue2_literal::elem c_in) : c(std::move(c_in)) {}
+    explicit LitGraphVertexProps(ue2_literal::elem c_in) : c(c_in) {}
     ue2_literal::elem c; // string element (char + bool)
     size_t index = 0; // managed by ue2_graph
 };
@@ -261,6 +262,7 @@ static
 bool hasSuffixLiterals(const set<ue2_literal> &s) {
     for (auto it = s.begin(), ite = s.end(); it != ite; ++it) {
         for (auto jt = std::next(it); jt != ite; ++jt) {
+            // cppcheck-suppress useStlAlgorithm
             if (isSuffix(*it, *jt) || isSuffix(*jt, *it)) {
                 DEBUG_PRINTF("'%s' and '%s' have suffix issues\n",
                              dumpString(*it).c_str(),
@@ -360,6 +362,7 @@ static
 u64a litCountBits(const ue2_literal &lit) {
     u64a n = 0;
     for (const auto &c : lit) {
+        // cppcheck-suppress useStlAlgorithm
         n += c.nocase ? 7 : 8;
     }
     return n;
@@ -488,9 +491,9 @@ vector<LitEdge> add_reverse_edges_and_index(LitGraph &lg) {
     const size_t edge_count = num_edges(lg);
     vector<LitEdge> fwd_edges;
     fwd_edges.reserve(edge_count);
-    for (const auto &e : edges_range(lg)) {
-        fwd_edges.push_back(e);
-    }
+
+    const auto &er = edges_range(lg);
+    std::copy(begin(er), end(er),  std::back_inserter(fwd_edges));
 
     vector<LitEdge> rev_map(2 * edge_count);
 
@@ -528,7 +531,7 @@ void findMinCut(LitGraph &lg, vector<LitEdge> &cutset) {
     vector<s32> distances(num_verts);
     vector<LitEdge> predecessors(num_verts);
     vector<u64a> residuals(num_edges(lg));
-
+    //cppcheck-suppress unreadVariable
     UNUSED u64a flow = boykov_kolmogorov_max_flow(lg,
             get(&LitGraphEdgeProps::score, lg),
             make_iterator_property_map(residuals.begin(), e_index_map),
@@ -670,10 +673,8 @@ u64a scoreSet(const set<ue2_literal> &s) {
     }
 
     u64a score = 1ULL;
-
-    for (const auto &lit : s) {
-        score += calculateScore(lit);
-    }
+    auto cscore = [](u64a z, const ue2_literal &lit) { return z + calculateScore(lit); };
+    score += std::accumulate(s.begin(), s.end(), 0, cscore);
 
     return score;
 }
@@ -881,6 +882,7 @@ bool literalIsWholeGraph(const NGHolder &g, const ue2_literal &lit) {
     }
 
     // Our last value for v should have only start states for predecessors.
+    // cppcheck-suppress useStlAlgorithm
     for (auto u : inv_adjacent_vertices_range(v, g)) {
         if (!is_any_start(u, g)) {
             DEBUG_PRINTF("pred is not start\n");
